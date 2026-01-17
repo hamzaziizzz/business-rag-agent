@@ -1,0 +1,26 @@
+{
+    "_meta": {
+        "hash": {
+            "sha256": "a06c04ceabbc174fb7c2713df6eaabb2a4a701977084c5650a268ba0f8eaa7fb"
+        },
+        "pipfile-spec": 6,
+        "requires": {
+            "python_full_version": "3.10.12",
+            "python_version": "3.10"
+        },
+        "sources": [
+            {
+                "name": "pip_conf_index_global",
+                "url": "https://pypi.org/simple",
+                "verify_ssl": true
+            },
+            {
+                "name": "nvidia_ngc",
+                "url": "https://pypi.ngc.nvidia.com",
+                "verify_ssl": true
+            }
+        ]
+    },
+    "default": {},
+    "develop": {}
+}
