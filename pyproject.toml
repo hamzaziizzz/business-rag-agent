@@ -1,0 +1,8 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+norecursedirs = ["data", ".git", ".venv", ".mypy_cache", ".pytest_cache"]

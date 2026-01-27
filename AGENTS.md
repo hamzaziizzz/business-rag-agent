@@ -8,6 +8,31 @@ The system is designed for **enterprise use**, not experimentation or toy demos.
 
 ---
 
+## Python Runtime & Virtual Environment
+This project uses a **Pipenv-managed virtual environment**.  
+All agents must use the Python interpreter from the active Pipenv environment.
+
+### Active Python Interpreter
+`/home/hamza/.local/share/virtualenvs/business-rag-agent-C7T_qDqk/bin/python3`
+
+### How to Activate the Environment
+```bash
+pipenv shell
+```
+or explicitly:
+```bash
+source /home/hamza/.local/share/virtualenvs/business-rag-agent-C7T_qDqk/bin/activate
+```
+
+### Verification
+```bash
+which python3
+```
+
+Agents must not use system Python or a different virtual environment when running, testing, or modifying this project.
+
+---
+
 ## Primary Objectives
 
 AI agents contributing to this repository should optimize for:
