@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -63,7 +64,12 @@ class InMemoryVectorStore:
         return scored[:top_k]
 
     def _cosine_similarity(self, a: list[float], b: list[float]) -> float:
-        return sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(y * y for y in b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return dot / (norm_a * norm_b)
 
     def _matches_filters(
         self,

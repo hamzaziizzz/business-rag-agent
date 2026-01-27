@@ -10,4 +10,5 @@ if str(PROJECT_ROOT) not in sys.path:
 
 os.environ.setdefault("RAG_DB_ALLOWED_TABLES", "")
 os.environ.setdefault("RAG_DB_ALLOWED_COLUMNS", "")
+os.environ.setdefault("RAG_ALLOW_ANONYMOUS", "true")
 os.environ["RAG_ANSWERER"] = "extractive"

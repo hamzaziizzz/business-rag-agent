@@ -47,6 +47,7 @@ class Settings:
     object_store_session_token: str | None = os.getenv("RAG_OBJECT_STORE_SESSION_TOKEN")
     object_store_bucket: str | None = os.getenv("RAG_OBJECT_STORE_BUCKET")
     object_store_max_bytes: int = int(os.getenv("RAG_OBJECT_STORE_MAX_BYTES", "52428800"))
+    file_max_bytes: int = int(os.getenv("RAG_FILE_MAX_BYTES", "10485760"))
     db_chunk_size: int = int(os.getenv("RAG_DB_CHUNK_SIZE", "8000"))
     db_chunk_overlap: int = int(os.getenv("RAG_DB_CHUNK_OVERLAP", "0"))
     db_allowed_tables_raw: str = os.getenv("RAG_DB_ALLOWED_TABLES", "")
@@ -54,6 +55,11 @@ class Settings:
     api_keys_raw: str = os.getenv("RAG_API_KEYS", "")
     api_key_map_raw: str = os.getenv("RAG_API_KEY_MAP", "")
     default_tenant_id: str = os.getenv("RAG_DEFAULT_TENANT_ID", "default")
+    allow_anonymous: bool = os.getenv("RAG_ALLOW_ANONYMOUS", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     answerer_mode_raw: str = os.getenv("RAG_ANSWERER", "extractive")
     llm_provider: str = os.getenv("RAG_LLM_PROVIDER", "ollama")
     llm_context_max_chars: int = int(os.getenv("RAG_LLM_CONTEXT_MAX_CHARS", "12000"))

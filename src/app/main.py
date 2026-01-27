@@ -51,6 +51,7 @@ from src.loaders.text import load_text_bytes
 from src.loaders.xlsx import XlsxLoaderError, load_xlsx_bytes
 from src.loaders.csv_loader import CSVLoaderError, load_csv_bytes
 from src.rag.answerer import ExtractiveAnswerer, SummarizingAnswerer
+from src.rag.embeddings import EmbeddingConfigError
 from src.rag.formatters import extract_db_records, format_db_answer
 from src.rag.guardrails import DEFAULT_REFUSAL, require_context
 from src.rag.highlights import build_highlights
@@ -83,6 +84,23 @@ def _record_audit_event(event: AuditEvent) -> None:
 
 def _safe_error_message(exc: Exception) -> str:
     return type(exc).__name__
+
+
+async def _read_upload_bytes(upload: UploadFile, max_bytes: int | None) -> bytes:
+    if not max_bytes or max_bytes <= 0:
+        return await upload.read()
+    buffer = bytearray()
+    while True:
+        chunk = await upload.read(65536)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File exceeds maximum size of {max_bytes} bytes",
+            )
+    return bytes(buffer)
 
 
 @app.middleware("http")
@@ -723,12 +741,26 @@ async def delete_sources(
         raise HTTPException(status_code=400, detail="source_types or source_names required")
     pipeline = get_pipeline()
     tenant_id = resolve_tenant_id(http_request, auth)
-    deleted = pipeline.delete_by_source(
-        source_types=request.source_types,
-        source_names=request.source_names,
-        tenant_id=tenant_id,
-        source_filter_mode=request.source_filter_mode,
-    )
+    try:
+        deleted = pipeline.delete_by_source(
+            source_types=request.source_types,
+            source_names=request.source_names,
+            tenant_id=tenant_id,
+            source_filter_mode=request.source_filter_mode,
+        )
+    except EmbeddingConfigError as exc:
+        _record_audit_event(
+            AuditEvent(
+                event_type="delete",
+                request_id=getattr(http_request.state, "request_id", str(uuid.uuid4())),
+                tenant_id=tenant_id,
+                actor=hash_actor(auth.api_key),
+                status="failed",
+                route=None,
+                detail={"error": _safe_error_message(exc)},
+            )
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     _record_audit_event(
         AuditEvent(
             event_type="delete",
@@ -774,7 +806,36 @@ async def ingest_files(
     for idx, upload in enumerate(files, start=1):
         filename = upload.filename or f"upload-{idx}"
         suffix = Path(filename).suffix.lower()
-        data = await upload.read()
+        try:
+            data = await _read_upload_bytes(upload, settings.file_max_bytes)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else "File exceeds size limit"
+            _record_audit_event(
+                AuditEvent(
+                    event_type="ingest",
+                    request_id=request_id,
+                    tenant_id=tenant_id,
+                    actor=hash_actor(auth.api_key),
+                    status="failed",
+                    route=None,
+                    detail={
+                        "source_type": "file",
+                        "source_name": filename,
+                        "error": detail,
+                    },
+                )
+            )
+            if store and record_id:
+                store.record_failure(record_id, detail)
+            logger.error(
+                "file_ingest_failed",
+                extra={
+                    "request_id": request_id,
+                    "source_name": filename,
+                    "detail": detail,
+                },
+            )
+            raise
         if not data:
             continue
         doc_id = f"{Path(filename).stem}-{idx}"

@@ -19,7 +19,13 @@ async def require_api_key(request: Request) -> AuthContext:
     key_map = settings.api_key_map
     allowed = settings.api_keys
     if not (key_map or allowed):
-        return AuthContext(api_key=None, role="admin", tenant_id=settings.default_tenant_id)
+        if settings.allow_anonymous:
+            return AuthContext(api_key=None, role="admin", tenant_id=settings.default_tenant_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if api_key is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
