@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""RAG pipeline orchestration: retrieval, filtering, and answering."""
+
 import logging
 from dataclasses import dataclass
 from typing import Iterable
@@ -13,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _matches_source_name(metadata: dict[str, object], allowed: set[str]) -> bool:
+    """Check if metadata source matches the allowlist."""
     source_name = str(metadata.get("source_name", "")).lower()
     source = str(metadata.get("source", "")).lower()
     candidates = {value for value in (source_name, source) if value}
@@ -22,6 +25,7 @@ def _matches_source_name(metadata: dict[str, object], allowed: set[str]) -> bool
 
 
 def _extract_source_name(metadata: dict[str, object]) -> str:
+    """Extract a normalized source name from metadata."""
     source_name = str(metadata.get("source_name", "")).strip().lower()
     source = str(metadata.get("source", "")).strip().lower()
     if source_name:
@@ -33,6 +37,7 @@ def _extract_source_name(metadata: dict[str, object]) -> str:
 
 @dataclass
 class RAGResponse:
+    """Final RAG response with sources and refusal reason."""
     answer: str
     sources: list[ContextChunk]
     refusal_reason: str | None = None
@@ -40,6 +45,7 @@ class RAGResponse:
 
 @dataclass
 class RAGPipeline:
+    """Core RAG pipeline for ingesting and answering queries."""
     vectorstore: InMemoryVectorStore
     answerer: ExtractiveAnswerer
     max_chunks: int = 4
@@ -50,6 +56,7 @@ class RAGPipeline:
     source_name_weights: dict[str, float] | None = None
 
     def ingest(self, documents: Iterable[Document]) -> int:
+        """Add documents to the vector store."""
         return self.vectorstore.add_documents(documents)
 
     def delete_by_source(
@@ -59,6 +66,7 @@ class RAGPipeline:
         tenant_id: str | None = None,
         source_filter_mode: str = "and",
     ) -> int:
+        """Delete documents by source filters."""
         if not (source_types or source_names):
             return 0
         return self.vectorstore.delete_by_source(
@@ -77,6 +85,7 @@ class RAGPipeline:
         tenant_id: str | None = None,
         source_filter_mode: str = "and",
     ) -> list[SearchResult]:
+        """Retrieve candidate results from the vector store."""
         results = self.vectorstore.search(
             query,
             top_k=top_k or self.max_chunks,
@@ -105,6 +114,7 @@ class RAGPipeline:
         source_filter_mode: str = "and",
         limit: int | None = None,
     ) -> list[ContextChunk]:
+        """Filter and rank retrieved results into context chunks."""
         contexts: list[ContextChunk] = []
         threshold_default = self.min_score if min_score is None else min_score
         thresholds_by_type = min_score_by_type or self.min_score_by_type or {}
@@ -170,13 +180,15 @@ class RAGPipeline:
         source_names: list[str] | None = None,
         tenant_id: str | None = None,
         source_filter_mode: str = "and",
+        retrieval_query: str | None = None,
     ) -> RAGResponse:
+        """Answer a query using retrieved context and guardrails."""
         base_limit = top_k or self.max_chunks
         retrieval_limit = base_limit
         if source_types or source_names:
             retrieval_limit = min(base_limit * 5, 50)
         results = self.retrieve(
-            query,
+            retrieval_query or query,
             top_k=retrieval_limit,
             source_types=source_types,
             source_names=source_names,

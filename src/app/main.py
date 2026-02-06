@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""FastAPI application entrypoint for the document-only RAG service."""
+
 import hashlib
 import json
 import logging
@@ -8,19 +10,17 @@ from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse
 
 from src.app.dependencies import (
     get_audit_store,
     get_embedding_config_report,
     get_metadata_store,
     get_pipeline,
+    get_query_rewriter,
 )
 from src.app.settings import settings
 from src.app.schemas import (
-    APIIngestRequest,
-    ObjectIngestRequest,
-    DBIngestRequest,
-    DBTableIngestRequest,
     DeleteSourceRequest,
     DeleteSourceResponse,
     IngestRequest,
@@ -34,16 +34,7 @@ from src.app.schemas import (
 )
 from src.app.security import AuthContext, require_api_key, require_roles, resolve_tenant_id
 from src.app.metrics import metrics_middleware, metrics_response
-from src.loaders.chunking import chunk_document
-from src.loaders.db import (
-    DBIngestConfig,
-    DBLoaderError,
-    DBTableIngestConfig,
-    load_db_documents,
-    load_db_table_documents,
-)
-from src.loaders.api import APIIngestConfig, APILoaderError, fetch_api_documents
-from src.loaders.object_store import ObjectStoreConfig, ObjectStoreError, load_object_document
+from src.loaders.chunking import chunk_document, normalize_query_tokens
 from src.loaders.markdown import load_markdown_bytes
 from src.loaders.docx import DocxLoaderError, load_docx_bytes
 from src.loaders.pdf import PDFLoaderError, load_pdf_bytes
@@ -52,11 +43,12 @@ from src.loaders.xlsx import XlsxLoaderError, load_xlsx_bytes
 from src.loaders.csv_loader import CSVLoaderError, load_csv_bytes
 from src.rag.answerer import ExtractiveAnswerer, SummarizingAnswerer
 from src.rag.embeddings import EmbeddingConfigError
-from src.rag.formatters import extract_db_records, format_db_answer
+from src.rag.formatters import build_json_summary, extract_db_records, format_db_answer
 from src.rag.guardrails import DEFAULT_REFUSAL, require_context
 from src.rag.highlights import build_highlights
-from src.rag.llm import LLMError, OllamaAnswerer
-from src.rag.sql import SQLValidationError, execute_select_query, validate_select_query
+from src.rag.llm import LLMError, base_system_prompt, build_llm_answerer, build_llm_gate
+from src.rag.citations import append_citation_footer, build_citations, order_contexts
+from src.rag.rewriter import QueryRewriteError
 from src.rag.types import ContextChunk, Document
 from src.agents.router import AgentRouter
 from src.metadata.store import IngestionMeta, MetadataStore
@@ -66,9 +58,28 @@ logger = logging.getLogger(__name__)
 router = AgentRouter()
 
 app = FastAPI(title="Business RAG Agent", version="0.1.0")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEMO_UI_PATH = PROJECT_ROOT / "fiverr_assets" / "simple_chat_ui.html"
+
+
+def _configure_logging() -> None:
+    """Configure root logging using environment settings."""
+    level_name = settings.log_level.strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+    logger.setLevel(level)
+
+
+_configure_logging()
 
 
 def _sanitize_url(url: str) -> str:
+    """Remove query fragments from URLs before storing in metadata."""
     parsed = urlparse(url)
     if not parsed.scheme:
         return url
@@ -76,6 +87,7 @@ def _sanitize_url(url: str) -> str:
 
 
 def _record_audit_event(event: AuditEvent) -> None:
+    """Persist an audit event if an audit store is configured."""
     audit_store = get_audit_store()
     if not audit_store:
         return
@@ -83,10 +95,141 @@ def _record_audit_event(event: AuditEvent) -> None:
 
 
 def _safe_error_message(exc: Exception) -> str:
+    """Return a safe error type name for logs and responses."""
     return type(exc).__name__
 
 
+async def _rewrite_query(query: str) -> tuple[str, bool]:
+    """Rewrite the query for retrieval when a rewriter is enabled."""
+    if not settings.query_rewriter_enabled:
+        return query, False
+    try:
+        rewriter = get_query_rewriter()
+        rewritten = await rewriter.rewrite(query)
+    except QueryRewriteError:
+        logger.warning("query_rewrite_failed")
+        return query, False
+    if not rewritten or rewritten.strip() == query.strip():
+        return query, False
+    return rewritten, True
+
+
+async def _llm_context_gate(
+    query: str,
+    contexts: list[ContextChunk],
+    request_id: str,
+) -> tuple[bool, str | None]:
+    """Ask the LLM gate to decide if context is sufficient to answer."""
+    if not settings.llm_gate_enabled:
+        return True, None
+    try:
+        gate = build_llm_gate(
+            settings.llm_provider,
+            api_key_openai=settings.openai_api_key,
+            api_key_gemini=settings.gemini_api_key,
+            openai_base_url=settings.openai_base_url,
+            openai_model=settings.openai_chat_model,
+            gemini_model=settings.gemini_chat_model,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_model=settings.ollama_model,
+            temperature=0.0,
+            max_tokens=settings.llm_gate_max_tokens,
+            timeout=settings.llm_gate_timeout,
+            context_max_chars=settings.llm_context_max_chars,
+        )
+        result = await gate.evaluate(query, contexts)
+    except LLMError as exc:
+        logger.error(
+            "llm_gate_failed",
+            extra={"request_id": request_id, "detail": _safe_error_message(exc)},
+        )
+        return True, None
+    logger.info(
+        "llm_gate_decision",
+        extra={
+            "request_id": request_id,
+            "sufficient": result.sufficient,
+            "reason": result.reason,
+        },
+    )
+    return result.sufficient, result.reason
+
+
+def _apply_citations(
+    answer: str, contexts: list[ContextChunk], refusal_reason: str | None
+) -> tuple[str, list]:
+    """Append citations to the answer and serialize citation metadata."""
+    if refusal_reason or answer == DEFAULT_REFUSAL:
+        return answer, []
+    citations = build_citations(contexts)
+    answer = append_citation_footer(answer, citations)
+    return answer, [citation.__dict__ for citation in citations]
+
+
+def _build_structured_payload(
+    contexts: list[ContextChunk],
+    is_db: bool,
+    max_items: int,
+) -> dict[str, object] | None:
+    """Build a structured response payload from retrieved contexts."""
+    if is_db:
+        records = extract_db_records(contexts, max_items=max_items)
+        if records:
+            return {"type": "db", "records": records}
+        return None
+    summary = build_json_summary(contexts, max_items=max_items)
+    if summary:
+        return {"type": "json", **summary}
+    return None
+
+
+def _role_system_prompt(role: str) -> str:
+    """Augment the base system prompt with role-specific guidance."""
+    base = base_system_prompt()
+    role_normalized = role.strip().lower()
+    if role_normalized == "admin":
+        addon = "Provide detailed, complete answers with full context coverage."
+    elif role_normalized == "writer":
+        addon = "Focus on actionable, clear steps and policy-aligned guidance."
+    else:
+        addon = "Keep answers concise and easy to scan."
+    return f"{base} {addon}"
+
+
+def role_system_prompt_for_tests(role: str) -> str:
+    """Expose role prompt generation for tests."""
+    return _role_system_prompt(role)
+
+
+def _log_top_scores(request_id: str, results: list["SearchResult"], limit: int = 5) -> None:
+    """Log top retrieval scores for debugging threshold behavior."""
+    from src.rag.types import SearchResult
+
+    payload = []
+    for result in results[:limit]:
+        metadata = result.document.metadata or {}
+        payload.append(
+            {
+                "doc_id": result.document.doc_id,
+                "score": result.score,
+                "source_type": metadata.get("source_type"),
+                "source_name": metadata.get("source_name"),
+            }
+        )
+    logger.info(
+        "retrieval_top_scores",
+        extra={
+            "request_id": request_id,
+            "count": len(results),
+            "top": payload,
+        },
+    )
+
+
+
+
 async def _read_upload_bytes(upload: UploadFile, max_bytes: int | None) -> bytes:
+    """Stream upload bytes with a hard size limit."""
     if not max_bytes or max_bytes <= 0:
         return await upload.read()
     buffer = bytearray()
@@ -105,6 +248,7 @@ async def _read_upload_bytes(upload: UploadFile, max_bytes: int | None) -> bytes
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
+    """Attach or create a request ID for traceability."""
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
     response = await call_next(request)
@@ -114,21 +258,33 @@ async def add_request_id(request: Request, call_next):
 
 @app.middleware("http")
 async def record_metrics(request: Request, call_next):
+    """Capture request metrics before returning the response."""
     return await metrics_middleware(request, call_next)
 
 
 @app.get("/metrics")
 async def metrics():
+    """Expose Prometheus-style metrics."""
     return metrics_response()
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
+    """Simple health probe for uptime checks."""
     return {"status": "ok"}
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def demo() -> HTMLResponse:
+    """Serve the static HTML demo UI."""
+    if not DEMO_UI_PATH.exists():
+        raise HTTPException(status_code=404, detail="Demo UI not found")
+    return HTMLResponse(DEMO_UI_PATH.read_text(encoding="utf-8"))
 
 
 @app.get("/stats", response_model=StatsResponse)
 async def stats(auth: AuthContext = Depends(require_api_key)) -> StatsResponse:
+    """Return vector store stats for admins."""
     require_roles(auth, {"admin"})
     pipeline = get_pipeline()
     return StatsResponse(**pipeline.vectorstore.stats())
@@ -136,6 +292,7 @@ async def stats(auth: AuthContext = Depends(require_api_key)) -> StatsResponse:
 
 @app.get("/stats/health", response_model=StatsHealthResponse)
 async def stats_health(auth: AuthContext = Depends(require_api_key)) -> StatsHealthResponse:
+    """Return vector store health status for admins."""
     require_roles(auth, {"admin"})
     pipeline = get_pipeline()
     return StatsHealthResponse(**pipeline.vectorstore.health())
@@ -145,6 +302,7 @@ async def stats_health(auth: AuthContext = Depends(require_api_key)) -> StatsHea
 async def embedding_health(
     auth: AuthContext = Depends(require_api_key),
 ) -> EmbeddingHealthResponse:
+    """Return embedding configuration health checks."""
     require_roles(auth, {"admin"})
     report = get_embedding_config_report()
     return EmbeddingHealthResponse(**report.__dict__)
@@ -156,6 +314,7 @@ async def ingest(
     http_request: Request,
     auth: AuthContext = Depends(require_api_key),
 ) -> IngestResponse:
+    """Ingest raw text documents into the vector store."""
     require_roles(auth, {"writer", "admin"})
     pipeline = get_pipeline()
     store = get_metadata_store()
@@ -187,6 +346,9 @@ async def ingest(
                 document,
                 max_chars=settings.chunk_size,
                 overlap=settings.chunk_overlap,
+                max_tokens=settings.chunk_tokens,
+                token_overlap=settings.chunk_token_overlap,
+                encoding_name=settings.tokenizer_encoding,
             )
         )
     if not documents:
@@ -226,508 +388,6 @@ async def ingest(
     return IngestResponse(ingested=ingested)
 
 
-@app.post("/ingest/db", response_model=IngestResponse)
-async def ingest_db(
-    request: DBIngestRequest,
-    http_request: Request,
-    auth: AuthContext = Depends(require_api_key),
-) -> IngestResponse:
-    require_roles(auth, {"writer", "admin"})
-    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    pipeline = get_pipeline()
-    store = get_metadata_store()
-    tenant_id = resolve_tenant_id(http_request, auth)
-    source_name = request.source_name or "database"
-    record_id = None
-    if store:
-        meta = IngestionMeta(
-            source_type="db",
-            source_name=source_name,
-            source_uri=MetadataStore.redact_uri(request.connection_uri),
-            status="started",
-            extra={
-                "query_hash": hashlib.sha256(request.query.encode("utf-8")).hexdigest(),
-                "limit": request.limit or settings.db_max_rows,
-            },
-        )
-        record_id = store.record_start(meta)
-    config = DBIngestConfig(
-        connection_uri=request.connection_uri,
-        query=request.query,
-        params=request.params,
-        limit=request.limit or settings.db_max_rows,
-        source_name=source_name,
-        source_type="db",
-    )
-    try:
-        documents = []
-        for document in load_db_documents(config):
-            document.metadata.setdefault("tenant_id", tenant_id)
-            documents.extend(
-                chunk_document(
-                    document,
-                    max_chars=settings.db_chunk_size,
-                    overlap=settings.db_chunk_overlap,
-                )
-            )
-    except DBLoaderError as exc:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={
-                    "source_type": "db",
-                    "source_name": source_name,
-                    "error": _safe_error_message(exc),
-                },
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, _safe_error_message(exc))
-        logger.error(
-            "db_ingest_failed",
-            extra={
-                "request_id": request_id,
-                "source_name": source_name,
-                "detail": _safe_error_message(exc),
-            },
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not documents:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={"source_type": "db", "source_name": source_name, "reason": "empty"},
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, "No database rows returned")
-        logger.info(
-            "db_ingest_empty",
-            extra={"request_id": request_id, "source_name": source_name},
-        )
-        raise HTTPException(status_code=400, detail="No database rows returned")
-    ingested = pipeline.ingest(documents)
-    _record_audit_event(
-        AuditEvent(
-            event_type="ingest",
-            request_id=request_id,
-            tenant_id=tenant_id,
-            actor=hash_actor(auth.api_key),
-            status="completed",
-            route=None,
-            detail={
-                "source_type": "db",
-                "source_name": source_name,
-                "ingested": ingested,
-                "chunk_count": len(documents),
-            },
-        )
-    )
-    if store and record_id:
-        store.record_complete(record_id, ingested=ingested, chunk_count=len(documents))
-    logger.info(
-        "db_ingest_complete",
-        extra={"request_id": request_id, "source_name": source_name, "ingested": ingested},
-    )
-    return IngestResponse(ingested=ingested)
-
-
-@app.post("/ingest/db/table", response_model=IngestResponse)
-async def ingest_db_table(
-    request: DBTableIngestRequest,
-    http_request: Request,
-    auth: AuthContext = Depends(require_api_key),
-) -> IngestResponse:
-    require_roles(auth, {"writer", "admin"})
-    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    pipeline = get_pipeline()
-    store = get_metadata_store()
-    tenant_id = resolve_tenant_id(http_request, auth)
-    source_name = request.source_name or request.table
-    record_id = None
-    if store:
-        meta = IngestionMeta(
-            source_type="db",
-            source_name=source_name,
-            source_uri=MetadataStore.redact_uri(request.connection_uri),
-            status="started",
-            extra={
-                "table": request.table,
-                "columns": request.columns,
-                "filters": list(request.filters.keys()),
-                "limit": request.limit or settings.db_max_rows,
-            },
-        )
-        record_id = store.record_start(meta)
-    config = DBTableIngestConfig(
-        connection_uri=request.connection_uri,
-        table=request.table,
-        columns=request.columns,
-        filters=request.filters,
-        limit=request.limit or settings.db_max_rows,
-        source_name=source_name,
-        allowed_tables=settings.db_allowed_tables,
-        allowed_columns=settings.db_allowed_columns,
-        source_type="db",
-    )
-    try:
-        documents = []
-        for document in load_db_table_documents(config):
-            document.metadata.setdefault("tenant_id", tenant_id)
-            documents.extend(
-                chunk_document(
-                    document,
-                    max_chars=settings.db_chunk_size,
-                    overlap=settings.db_chunk_overlap,
-                )
-            )
-    except DBLoaderError as exc:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={
-                    "source_type": "db",
-                    "source_name": source_name,
-                    "error": _safe_error_message(exc),
-                },
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, _safe_error_message(exc))
-        logger.error(
-            "db_table_ingest_failed",
-            extra={
-                "request_id": request_id,
-                "source_name": source_name,
-                "detail": _safe_error_message(exc),
-            },
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not documents:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={"source_type": "db", "source_name": source_name, "reason": "empty"},
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, "No database rows returned")
-        logger.info(
-            "db_table_ingest_empty",
-            extra={"request_id": request_id, "source_name": source_name},
-        )
-        raise HTTPException(status_code=400, detail="No database rows returned")
-    ingested = pipeline.ingest(documents)
-    _record_audit_event(
-        AuditEvent(
-            event_type="ingest",
-            request_id=request_id,
-            tenant_id=tenant_id,
-            actor=hash_actor(auth.api_key),
-            status="completed",
-            route=None,
-            detail={
-                "source_type": "db",
-                "source_name": source_name,
-                "ingested": ingested,
-                "chunk_count": len(documents),
-            },
-        )
-    )
-    if store and record_id:
-        store.record_complete(record_id, ingested=ingested, chunk_count=len(documents))
-    logger.info(
-        "db_table_ingest_complete",
-        extra={"request_id": request_id, "source_name": source_name, "ingested": ingested},
-    )
-    return IngestResponse(ingested=ingested)
-
-
-@app.post("/ingest/api", response_model=IngestResponse)
-async def ingest_api(
-    request: APIIngestRequest,
-    http_request: Request,
-    auth: AuthContext = Depends(require_api_key),
-) -> IngestResponse:
-    require_roles(auth, {"writer", "admin"})
-    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    pipeline = get_pipeline()
-    store = get_metadata_store()
-    tenant_id = resolve_tenant_id(http_request, auth)
-    source_name = request.source_name or "api"
-    record_id = None
-    if store:
-        meta = IngestionMeta(
-            source_type="api",
-            source_name=source_name,
-            source_uri=_sanitize_url(request.url),
-            status="started",
-            extra={
-                "method": request.method,
-                "limit": request.max_bytes or settings.api_max_bytes,
-            },
-        )
-        record_id = store.record_start(meta)
-    config = APIIngestConfig(
-        url=request.url,
-        method=request.method,
-        headers=request.headers,
-        params=request.params,
-        json_body=request.json_body,
-        timeout=request.timeout or settings.api_timeout,
-        max_bytes=request.max_bytes or settings.api_max_bytes,
-        source_name=source_name,
-        source_type="api",
-    )
-    try:
-        documents = []
-        raw_documents = await fetch_api_documents(config)
-        for document in raw_documents:
-            document.metadata.setdefault("tenant_id", tenant_id)
-            documents.extend(
-                chunk_document(
-                    document,
-                    max_chars=settings.chunk_size,
-                    overlap=settings.chunk_overlap,
-                )
-            )
-    except APILoaderError as exc:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={
-                    "source_type": "api",
-                    "source_name": source_name,
-                    "error": _safe_error_message(exc),
-                },
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, _safe_error_message(exc))
-        logger.error(
-            "api_ingest_failed",
-            extra={
-                "request_id": request_id,
-                "source_name": source_name,
-                "detail": _safe_error_message(exc),
-            },
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not documents:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={"source_type": "api", "source_name": source_name, "reason": "empty"},
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, "No API content returned")
-        logger.info(
-            "api_ingest_empty",
-            extra={"request_id": request_id, "source_name": source_name},
-        )
-        raise HTTPException(status_code=400, detail="No API content returned")
-    ingested = pipeline.ingest(documents)
-    _record_audit_event(
-        AuditEvent(
-            event_type="ingest",
-            request_id=request_id,
-            tenant_id=tenant_id,
-            actor=hash_actor(auth.api_key),
-            status="completed",
-            route=None,
-            detail={
-                "source_type": "api",
-                "source_name": source_name,
-                "ingested": ingested,
-                "chunk_count": len(documents),
-            },
-        )
-    )
-    if store and record_id:
-        store.record_complete(record_id, ingested=ingested, chunk_count=len(documents))
-    logger.info(
-        "api_ingest_complete",
-        extra={"request_id": request_id, "source_name": source_name, "ingested": ingested},
-    )
-    return IngestResponse(ingested=ingested)
-
-
-@app.post("/ingest/object", response_model=IngestResponse)
-async def ingest_object(
-    request: ObjectIngestRequest,
-    http_request: Request,
-    auth: AuthContext = Depends(require_api_key),
-) -> IngestResponse:
-    require_roles(auth, {"writer", "admin"})
-    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    pipeline = get_pipeline()
-    store = get_metadata_store()
-    tenant_id = resolve_tenant_id(http_request, auth)
-    bucket = request.bucket or settings.object_store_bucket
-    if not bucket:
-        raise HTTPException(status_code=400, detail="Bucket is required")
-    key = request.key
-    source_name = request.source_name or Path(key).stem
-    source = f"s3://{bucket}/{key}"
-    doc_id = f"{Path(key).stem}-{request_id[:8]}"
-    suffix = Path(key).suffix.lower()
-    if suffix in {".txt", ".text"}:
-        loader = load_text_bytes
-        source_type = "text"
-    elif suffix in {".md", ".markdown"}:
-        loader = load_markdown_bytes
-        source_type = "markdown"
-    elif suffix == ".pdf":
-        loader = load_pdf_bytes
-        source_type = "pdf"
-    elif suffix == ".docx":
-        loader = load_docx_bytes
-        source_type = "docx"
-    elif suffix == ".xlsx":
-        loader = load_xlsx_bytes
-        source_type = "xlsx"
-    elif suffix in {".csv", ".tsv"}:
-        loader = load_csv_bytes
-        source_type = "csv"
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported object type: {suffix}")
-
-    config = ObjectStoreConfig(
-        bucket=bucket,
-        key=key,
-        endpoint_url=request.endpoint_url or settings.object_store_endpoint_url,
-        region=request.region or settings.object_store_region,
-        access_key=request.access_key or settings.object_store_access_key,
-        secret_key=request.secret_key or settings.object_store_secret_key,
-        session_token=request.session_token or settings.object_store_session_token,
-        max_bytes=request.max_bytes or settings.object_store_max_bytes,
-    )
-    record_id = None
-    if store:
-        meta = IngestionMeta(
-            source_type="object",
-            source_name=source_name,
-            source_uri=source,
-            status="started",
-            extra={"bucket": bucket, "key": key, "max_bytes": config.max_bytes},
-        )
-        record_id = store.record_start(meta)
-    try:
-        document = load_object_document(
-            config=config,
-            loader=loader,
-            doc_id=doc_id,
-            source=source,
-        )
-    except (ObjectStoreError, PDFLoaderError, DocxLoaderError, XlsxLoaderError, CSVLoaderError) as exc:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={
-                    "source_type": "object",
-                    "source_name": source_name,
-                    "error": _safe_error_message(exc),
-                },
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, _safe_error_message(exc))
-        logger.error(
-            "object_ingest_failed",
-            extra={
-                "request_id": request_id,
-                "source_name": source_name,
-                "detail": _safe_error_message(exc),
-            },
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    document.metadata["source_type"] = source_type
-    document.metadata.setdefault("source_name", source_name)
-    document.metadata.setdefault("tenant_id", tenant_id)
-    chunks = chunk_document(
-        document,
-        max_chars=settings.chunk_size,
-        overlap=settings.chunk_overlap,
-    )
-    if not chunks:
-        _record_audit_event(
-            AuditEvent(
-                event_type="ingest",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={"source_type": "object", "source_name": source_name, "reason": "empty"},
-            )
-        )
-        if store and record_id:
-            store.record_failure(record_id, "No object content to ingest")
-        raise HTTPException(status_code=400, detail="No object content to ingest")
-    ingested = pipeline.ingest(chunks)
-    _record_audit_event(
-        AuditEvent(
-            event_type="ingest",
-            request_id=request_id,
-            tenant_id=tenant_id,
-            actor=hash_actor(auth.api_key),
-            status="completed",
-            route=None,
-            detail={
-                "source_type": "object",
-                "source_name": source_name,
-                "ingested": ingested,
-                "chunk_count": len(chunks),
-            },
-        )
-    )
-    if store and record_id:
-        store.record_complete(record_id, ingested=ingested, chunk_count=len(chunks))
-    logger.info(
-        "object_ingest_complete",
-        extra={"request_id": request_id, "source_name": source_name, "ingested": ingested},
-    )
-    return IngestResponse(ingested=ingested)
 
 
 @app.post("/ingest/delete", response_model=DeleteSourceResponse)
@@ -736,6 +396,7 @@ async def delete_sources(
     http_request: Request,
     auth: AuthContext = Depends(require_api_key),
 ) -> DeleteSourceResponse:
+    """Delete ingested documents using source filters."""
     require_roles(auth, {"admin"})
     if not (request.source_types or request.source_names):
         raise HTTPException(status_code=400, detail="source_types or source_names required")
@@ -785,6 +446,7 @@ async def ingest_files(
     files: list[UploadFile] = File(...),
     auth: AuthContext = Depends(require_api_key),
 ) -> IngestResponse:
+    """Ingest uploaded files into the vector store."""
     require_roles(auth, {"writer", "admin"})
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -891,6 +553,9 @@ async def ingest_files(
                 document,
                 max_chars=settings.chunk_size,
                 overlap=settings.chunk_overlap,
+                max_tokens=settings.chunk_tokens,
+                token_overlap=settings.chunk_token_overlap,
+                encoding_name=settings.tokenizer_encoding,
             )
         )
 
@@ -937,6 +602,7 @@ async def query(
     http_request: Request,
     auth: AuthContext = Depends(require_api_key),
 ) -> QueryResponse:
+    """Route and answer a query using the RAG pipeline."""
     require_roles(auth, {"reader", "writer", "admin"})
     request_id = request.trace_id or getattr(http_request.state, "request_id", str(uuid.uuid4()))
     tenant_id = resolve_tenant_id(http_request, auth)
@@ -945,9 +611,23 @@ async def query(
         decision_tool = request.route
         decision_reason = "explicit_route"
     else:
-        decision = router.route(request.query)
+        decision = await router.route_async(request.query)
         decision_tool = decision.tool
         decision_reason = decision.reason
+    retrieval_query = request.query
+    rewrite_applied = False
+    if decision_tool in {"rag", "summarize"}:
+        retrieval_query, rewrite_applied = await _rewrite_query(request.query)
+        retrieval_query = normalize_query_tokens(
+            retrieval_query, encoding_name=settings.tokenizer_encoding
+        )
+    role_prompt = _role_system_prompt(auth.role)
+    effective_min_score_by_type = (
+        settings.min_score_by_type if request.min_score is None else {}
+    )
+    effective_min_score_by_source = (
+        settings.min_score_by_source if request.min_score is None else {}
+    )
 
     logger.info(
         "query_received",
@@ -964,188 +644,21 @@ async def query(
             "source_filter_mode": request.source_filter_mode,
             "tenant_id": tenant_id,
             "actor": hash_actor(auth.api_key),
+            "rewrite_applied": rewrite_applied,
+            "rewrite_length": len(retrieval_query) if rewrite_applied else None,
+        },
+    )
+    logger.info(
+        "thresholds_effective",
+        extra={
+            "request_id": request_id,
+            "min_score": request.min_score,
+            "min_score_by_type": effective_min_score_by_type,
+            "min_score_by_source": effective_min_score_by_source,
         },
     )
 
     pipeline = get_pipeline()
-    if decision_tool == "sql":
-        require_roles(auth, {"admin"})
-        if not settings.sql_database_uri:
-            answer = "SQL tool is not configured for this deployment."
-            response = QueryResponse(
-                answer=answer,
-                sources=[],
-                refusal_reason="sql_not_configured",
-                route="sql",
-                request_id=request_id,
-            )
-            _record_audit_event(
-                AuditEvent(
-                    event_type="query",
-                    request_id=request_id,
-                    tenant_id=tenant_id,
-                    actor=hash_actor(auth.api_key),
-                    status="failed",
-                    route="sql",
-                    detail={"reason": "sql_not_configured"},
-                )
-            )
-            logger.info(
-                "query_completed",
-                extra={
-                    "request_id": request_id,
-                    "route": "sql",
-                    "refusal_reason": response.refusal_reason,
-                    "answer_length": len(response.answer),
-                    "sources": 0,
-                },
-            )
-            return response
-        sql_query = request.sql_query or request.query
-        try:
-            plan = validate_select_query(
-                sql_query,
-                allowed_tables=settings.sql_allowed_tables,
-                allowed_columns=settings.sql_allowed_columns,
-                max_rows=settings.sql_max_rows,
-            )
-            records = execute_select_query(
-                settings.sql_database_uri,
-                plan=plan,
-                params=request.sql_params,
-                max_rows=settings.sql_max_rows,
-            )
-        except SQLValidationError as exc:
-            _record_audit_event(
-                AuditEvent(
-                    event_type="query",
-                    request_id=request_id,
-                    tenant_id=tenant_id,
-                    actor=hash_actor(auth.api_key),
-                    status="failed",
-                    route="sql",
-                    detail={"error": _safe_error_message(exc)},
-                )
-            )
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if not records:
-            response = QueryResponse(
-                answer=DEFAULT_REFUSAL,
-                sources=[],
-                refusal_reason="no_context",
-                route="sql",
-                request_id=request_id,
-            )
-            _record_audit_event(
-                AuditEvent(
-                    event_type="query",
-                    request_id=request_id,
-                    tenant_id=tenant_id,
-                    actor=hash_actor(auth.api_key),
-                    status="refused",
-                    route="sql",
-                    detail={"reason": "no_context"},
-                )
-            )
-            logger.info(
-                "query_completed",
-                extra={
-                    "request_id": request_id,
-                    "route": response.route,
-                    "refusal_reason": response.refusal_reason,
-                    "answer_length": len(response.answer),
-                    "sources": 0,
-                },
-            )
-            return response
-
-        contexts = [
-            ContextChunk(
-                document_id=f"sql-{idx}",
-                content=json.dumps(record, ensure_ascii=True, default=str),
-                metadata={"source_type": "sql", "source_name": "sql"},
-                score=1.0,
-            )
-            for idx, record in enumerate(records, start=1)
-        ]
-        structured = {"type": "sql", "records": records}
-        answer = ""
-        llm_refusal_reason = None
-        if settings.answerer_mode.lower() == "llm":
-            try:
-                llm = OllamaAnswerer(
-                    base_url=settings.ollama_base_url,
-                    model=settings.ollama_model,
-                    temperature=settings.ollama_temperature,
-                    max_tokens=settings.ollama_max_tokens,
-                    timeout=settings.ollama_timeout,
-                    context_max_chars=settings.llm_context_max_chars,
-                )
-                llm_result = await llm.generate(request.query, contexts)
-                if llm_result.refusal_reason:
-                    llm_refusal_reason = llm_result.refusal_reason
-                else:
-                    answer = llm_result.answer
-            except LLMError as exc:
-                logger.error(
-                    "llm_failed",
-                    extra={
-                        "request_id": request_id,
-                        "detail": _safe_error_message(exc),
-                    },
-                )
-        if not answer or answer == DEFAULT_REFUSAL:
-            answer = SummarizingAnswerer().generate(request.query, contexts)
-        if not answer:
-            answer = DEFAULT_REFUSAL
-        sources = [
-            SourceChunk(
-                document_id=chunk.document_id,
-                content=chunk.content,
-                metadata=chunk.metadata,
-                score=chunk.score,
-                highlights=build_highlights(chunk.content, request.query),
-            )
-            for chunk in contexts
-        ]
-        refusal_reason = None
-        if answer == DEFAULT_REFUSAL:
-            refusal_reason = llm_refusal_reason or "empty_answer"
-        response = QueryResponse(
-            answer=answer,
-            sources=sources,
-            refusal_reason=refusal_reason,
-            route="sql",
-            request_id=request_id,
-            structured=structured,
-        )
-        _record_audit_event(
-            AuditEvent(
-                event_type="query",
-                request_id=request_id,
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="completed" if not response.refusal_reason else "refused",
-                route="sql",
-                detail={
-                    "sources": len(response.sources),
-                    "refusal_reason": response.refusal_reason,
-                },
-            )
-        )
-        logger.info(
-            "query_completed",
-            extra={
-                "request_id": request_id,
-                "route": response.route,
-                "refusal_reason": response.refusal_reason,
-                "answer_length": len(response.answer),
-                "sources": len(response.sources),
-            },
-        )
-        return response
-
     if decision_tool == "refuse":
         response = QueryResponse(
             answer=DEFAULT_REFUSAL,
@@ -1183,18 +696,19 @@ async def query(
         if request.source_types or request.source_names:
             retrieval_limit = min(base_limit * 5, 50)
         results = pipeline.retrieve(
-            request.query,
+            retrieval_query,
             top_k=retrieval_limit,
             source_types=request.source_types,
             source_names=request.source_names,
             tenant_id=tenant_id,
             source_filter_mode=request.source_filter_mode,
         )
+        _log_top_scores(request_id, results)
         contexts = pipeline.build_context(
             results,
             min_score=request.min_score,
-            min_score_by_type=settings.min_score_by_type,
-            min_score_by_source=settings.min_score_by_source,
+            min_score_by_type=effective_min_score_by_type,
+            min_score_by_source=effective_min_score_by_source,
             source_types=request.source_types,
             source_names=request.source_names,
             source_filter_mode=request.source_filter_mode,
@@ -1208,34 +722,79 @@ async def query(
                 refusal_reason=guardrail.reason,
                 route="summarize",
                 request_id=request_id,
+                answerer="guardrail",
+                answerer_reason=guardrail.reason,
             )
         else:
-            structured = None
+            allowed, gate_reason = await _llm_context_gate(
+                request.query, contexts, request_id
+            )
+            if not allowed:
+                response = QueryResponse(
+                    answer=DEFAULT_REFUSAL,
+                    sources=[],
+                    refusal_reason=gate_reason or "insufficient_context",
+                    route="summarize",
+                    request_id=request_id,
+                    answerer="llm_gate",
+                    answerer_reason=gate_reason or "insufficient_context",
+                )
+                logger.info(
+                    "query_completed",
+                    extra={
+                        "request_id": request_id,
+                        "route": "summarize",
+                        "refusal_reason": response.refusal_reason,
+                        "answer_length": len(response.answer),
+                        "sources": 0,
+                    },
+                )
+                _record_audit_event(
+                    AuditEvent(
+                        event_type="query",
+                        request_id=request_id,
+                        tenant_id=tenant_id,
+                        actor=hash_actor(auth.api_key),
+                        status="refused",
+                        route="summarize",
+                        detail={"reason": response.refusal_reason},
+                    )
+                )
+                return response
             is_db = contexts and all(
                 str(chunk.metadata.get("source_type", "")).lower() == "db"
                 for chunk in contexts
             )
-            if is_db:
-                records = extract_db_records(contexts, max_items=base_limit)
-                if records:
-                    structured = {"type": "db", "records": records}
+            structured = _build_structured_payload(contexts, is_db, base_limit)
             answer = ""
             llm_refusal_reason = None
+            preferred_source_ids: list[str] | None = None
+            llm_used = False
+            fallback_used = False
             if settings.answerer_mode.lower() == "llm":
                 try:
-                    llm = OllamaAnswerer(
-                        base_url=settings.ollama_base_url,
-                        model=settings.ollama_model,
+                    llm = build_llm_answerer(
+                        settings.llm_provider,
+                        api_key_openai=settings.openai_api_key,
+                        api_key_gemini=settings.gemini_api_key,
+                        openai_base_url=settings.openai_base_url,
+                        openai_model=settings.openai_chat_model,
+                        gemini_model=settings.gemini_chat_model,
+                        ollama_base_url=settings.ollama_base_url,
+                        ollama_model=settings.ollama_model,
                         temperature=settings.ollama_temperature,
                         max_tokens=settings.ollama_max_tokens,
                         timeout=settings.ollama_timeout,
                         context_max_chars=settings.llm_context_max_chars,
+                        system_prompt=role_prompt,
                     )
                     llm_result = await llm.generate(request.query, contexts)
                     if llm_result.refusal_reason:
                         llm_refusal_reason = llm_result.refusal_reason
                     else:
                         answer = llm_result.answer
+                        preferred_source_ids = llm_result.source_ids
+                        llm_used = True
                 except LLMError as exc:
                     logger.error(
                         "llm_failed",
@@ -1247,14 +806,35 @@ async def query(
             else:
                 summarizer = SummarizingAnswerer()
                 answer = summarizer.generate(request.query, contexts)
+                fallback_used = True
             if not answer or answer == DEFAULT_REFUSAL:
+                fallback_mode = settings.llm_fallback_mode.strip().lower()
                 if is_db:
                     formatted = format_db_answer(contexts, max_items=base_limit)
                     if formatted:
                         answer = formatted
+                        fallback_used = True
                 elif settings.answerer_mode.lower() == "llm":
+                    if fallback_mode == "refuse":
+                        answer = ""
+                    else:
+                        summarizer = SummarizingAnswerer()
+                        answer = summarizer.generate(request.query, contexts)
+                        fallback_used = True
+                elif not answer:
                     summarizer = SummarizingAnswerer()
                     answer = summarizer.generate(request.query, contexts)
+                    fallback_used = True
+            if llm_used:
+                logger.info(
+                    "answerer_llm_used",
+                    extra={"request_id": request_id, "route": "summarize"},
+                )
+            elif fallback_used:
+                logger.info(
+                    "answerer_fallback_used",
+                    extra={"request_id": request_id, "route": "summarize"},
+                )
             if not answer:
                 response = QueryResponse(
                     answer=DEFAULT_REFUSAL,
@@ -1262,8 +842,11 @@ async def query(
                     refusal_reason=llm_refusal_reason or "empty_answer",
                     route="summarize",
                     request_id=request_id,
+                    answerer="llm" if settings.answerer_mode.lower() == "llm" else "summarize",
+                    answerer_reason=llm_refusal_reason or "empty_answer",
                 )
             else:
+                ordered_contexts = order_contexts(contexts, preferred_source_ids)
                 sources = [
                     SourceChunk(
                         document_id=chunk.document_id,
@@ -1272,8 +855,9 @@ async def query(
                         score=chunk.score,
                         highlights=build_highlights(chunk.content, request.query),
                     )
-                    for chunk in contexts
+                    for chunk in ordered_contexts
                 ]
+                answer, citations = _apply_citations(answer, ordered_contexts, None)
                 response = QueryResponse(
                     answer=answer,
                     sources=sources,
@@ -1281,6 +865,13 @@ async def query(
                     route="summarize",
                     request_id=request_id,
                     structured=structured,
+                    citations=citations,
+                    answerer="llm" if llm_used else "summarize",
+                    answerer_reason=(
+                        None
+                        if llm_used
+                        else (llm_refusal_reason or "fallback")
+                    ),
                 )
         logger.info(
             "query_completed",
@@ -1290,6 +881,8 @@ async def query(
                 "refusal_reason": response.refusal_reason,
                 "answer_length": len(response.answer),
                 "sources": len(response.sources),
+                "llm_used": llm_used if "llm_used" in locals() else False,
+                "fallback_used": fallback_used if "fallback_used" in locals() else False,
             },
         )
         _record_audit_event(
@@ -1315,18 +908,19 @@ async def query(
         if request.source_types or request.source_names:
             retrieval_limit = min(base_limit * 5, 50)
         results = pipeline.retrieve(
-            request.query,
+            retrieval_query,
             top_k=retrieval_limit,
             source_types=request.source_types,
             source_names=request.source_names,
             tenant_id=tenant_id,
             source_filter_mode=request.source_filter_mode,
         )
+        _log_top_scores(request_id, results)
         contexts = pipeline.build_context(
             results,
             min_score=request.min_score,
-            min_score_by_type=settings.min_score_by_type,
-            min_score_by_source=settings.min_score_by_source,
+            min_score_by_type=effective_min_score_by_type,
+            min_score_by_source=effective_min_score_by_source,
             source_types=request.source_types,
             source_names=request.source_names,
             source_filter_mode=request.source_filter_mode,
@@ -1340,6 +934,8 @@ async def query(
                 refusal_reason=guardrail.reason,
                 route="rag",
                 request_id=request_id,
+                answerer="guardrail",
+                answerer_reason=guardrail.reason,
             )
             _record_audit_event(
                 AuditEvent(
@@ -1356,7 +952,42 @@ async def query(
                 "query_completed",
                 extra={
                     "request_id": request_id,
-                    "route": response.route,
+                    "route": "rag",
+                    "refusal_reason": response.refusal_reason,
+                    "answer_length": len(response.answer),
+                    "sources": 0,
+                },
+            )
+            return response
+        allowed, gate_reason = await _llm_context_gate(
+            request.query, contexts, request_id
+        )
+        if not allowed:
+            response = QueryResponse(
+                answer=DEFAULT_REFUSAL,
+                sources=[],
+                refusal_reason=gate_reason or "insufficient_context",
+                route="rag",
+                request_id=request_id,
+                answerer="llm_gate",
+                answerer_reason=gate_reason or "insufficient_context",
+            )
+            _record_audit_event(
+                AuditEvent(
+                    event_type="query",
+                    request_id=request_id,
+                    tenant_id=tenant_id,
+                    actor=hash_actor(auth.api_key),
+                    status="refused",
+                    route="rag",
+                    detail={"reason": response.refusal_reason},
+                )
+            )
+            logger.info(
+                "query_completed",
+                extra={
+                    "request_id": request_id,
+                    "route": "rag",
                     "refusal_reason": response.refusal_reason,
                     "answer_length": len(response.answer),
                     "sources": 0,
@@ -1365,28 +996,37 @@ async def query(
             return response
         answer = ""
         llm_refusal_reason = None
+        preferred_source_ids: list[str] | None = None
+        llm_used = False
+        fallback_used = False
         is_db = contexts and all(
             str(chunk.metadata.get("source_type", "")).lower() == "db"
             for chunk in contexts
         )
-        if is_db:
-            records = extract_db_records(contexts, max_items=base_limit)
-            if records:
-                structured = {"type": "db", "records": records}
+        structured = _build_structured_payload(contexts, is_db, base_limit)
         try:
-            llm = OllamaAnswerer(
-                base_url=settings.ollama_base_url,
-                model=settings.ollama_model,
+            llm = build_llm_answerer(
+                settings.llm_provider,
+                api_key_openai=settings.openai_api_key,
+                api_key_gemini=settings.gemini_api_key,
+                openai_base_url=settings.openai_base_url,
+                openai_model=settings.openai_chat_model,
+                gemini_model=settings.gemini_chat_model,
+                ollama_base_url=settings.ollama_base_url,
+                ollama_model=settings.ollama_model,
                 temperature=settings.ollama_temperature,
                 max_tokens=settings.ollama_max_tokens,
                 timeout=settings.ollama_timeout,
                 context_max_chars=settings.llm_context_max_chars,
+                system_prompt=role_prompt,
             )
             llm_result = await llm.generate(request.query, contexts)
             if llm_result.refusal_reason:
                 llm_refusal_reason = llm_result.refusal_reason
             else:
                 answer = llm_result.answer
+                preferred_source_ids = llm_result.source_ids
+                llm_used = True
         except LLMError as exc:
             logger.error(
                 "llm_failed",
@@ -1396,14 +1036,34 @@ async def query(
                 },
             )
         if not answer or answer == DEFAULT_REFUSAL:
+            fallback_mode = settings.llm_fallback_mode.strip().lower()
             if is_db:
                 formatted = format_db_answer(contexts, max_items=base_limit)
                 if formatted:
                     answer = formatted
+                    fallback_used = True
+            elif settings.answerer_mode.lower() == "llm" and fallback_mode == "summarize":
+                summarizer = SummarizingAnswerer()
+                answer = summarizer.generate(request.query, contexts)
+                fallback_used = True
+            elif settings.answerer_mode.lower() == "llm" and fallback_mode == "refuse":
+                answer = ""
             else:
                 answer = ExtractiveAnswerer().generate(request.query, contexts)
+                fallback_used = True
         if not answer:
             answer = DEFAULT_REFUSAL
+        if llm_used:
+            logger.info(
+                "answerer_llm_used",
+                extra={"request_id": request_id, "route": "rag"},
+            )
+        elif fallback_used:
+            logger.info(
+                "answerer_fallback_used",
+                extra={"request_id": request_id, "route": "rag"},
+            )
+        ordered_contexts = order_contexts(contexts, preferred_source_ids)
         sources = [
             SourceChunk(
                 document_id=chunk.document_id,
@@ -1412,11 +1072,12 @@ async def query(
                 score=chunk.score,
                 highlights=build_highlights(chunk.content, request.query),
             )
-            for chunk in contexts
+            for chunk in ordered_contexts
         ]
         refusal_reason = None
         if answer == DEFAULT_REFUSAL:
             refusal_reason = llm_refusal_reason or "empty_answer"
+        answer, citations = _apply_citations(answer, ordered_contexts, refusal_reason)
         response = QueryResponse(
             answer=answer,
             sources=sources,
@@ -1424,6 +1085,13 @@ async def query(
             route="rag",
             request_id=request_id,
             structured=structured,
+            citations=citations,
+            answerer="llm" if llm_used else "extractive",
+            answerer_reason=(
+                None
+                if llm_used
+                else (llm_refusal_reason or "fallback")
+            ),
         )
         _record_audit_event(
             AuditEvent(
@@ -1447,6 +1115,8 @@ async def query(
                 "refusal_reason": response.refusal_reason,
                 "answer_length": len(response.answer),
                 "sources": len(response.sources),
+                "llm_used": llm_used,
+                "fallback_used": fallback_used,
             },
         )
         return response
@@ -1454,18 +1124,20 @@ async def query(
         request.query,
         top_k=request.top_k,
         min_score=request.min_score,
-        min_score_by_type=settings.min_score_by_type,
-        min_score_by_source=settings.min_score_by_source,
+        min_score_by_type=effective_min_score_by_type,
+        min_score_by_source=effective_min_score_by_source,
         source_types=request.source_types,
         source_names=request.source_names,
         tenant_id=tenant_id,
         source_filter_mode=request.source_filter_mode,
+        retrieval_query=retrieval_query,
     )
     answer = result.answer
-    if result.sources and all(
+    is_db = result.sources and all(
         str(chunk.metadata.get("source_type", "")).lower() == "db"
         for chunk in result.sources
-    ):
+    )
+    if is_db:
         records = extract_db_records(result.sources, max_items=request.top_k or pipeline.max_chunks)
         if records:
             structured = {"type": "db", "records": records}
@@ -1474,6 +1146,11 @@ async def query(
         )
         if formatted:
             answer = formatted
+    else:
+        structured = _build_structured_payload(
+            result.sources, False, request.top_k or pipeline.max_chunks
+        )
+    ordered_contexts = order_contexts(result.sources, None)
     sources = [
         SourceChunk(
             document_id=chunk.document_id,
@@ -1482,8 +1159,9 @@ async def query(
             score=chunk.score,
             highlights=build_highlights(chunk.content, request.query),
         )
-        for chunk in result.sources
+        for chunk in ordered_contexts
     ]
+    answer, citations = _apply_citations(answer, ordered_contexts, result.refusal_reason)
     response = QueryResponse(
         answer=answer,
         sources=sources,
@@ -1491,6 +1169,9 @@ async def query(
         route="rag",
         request_id=request_id,
         structured=structured,
+        citations=citations,
+        answerer="extractive",
+        answerer_reason=None if not result.refusal_reason else result.refusal_reason,
     )
     _record_audit_event(
         AuditEvent(

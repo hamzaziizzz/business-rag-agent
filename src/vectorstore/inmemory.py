@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""In-memory vector store for local testing and small datasets."""
+
 import math
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -10,11 +12,13 @@ from src.rag.types import Document, SearchResult
 
 @dataclass
 class InMemoryVectorStore:
+    """Simple in-memory vector store with cosine similarity search."""
     embedder: EmbeddingProvider
     documents: list[Document] = field(default_factory=list)
     vectors: list[list[float]] = field(default_factory=list)
 
     def add_documents(self, documents: Iterable[Document]) -> int:
+        """Embed and store documents."""
         added = 0
         for document in documents:
             vector = self.embedder.embed(document.content)
@@ -32,6 +36,7 @@ class InMemoryVectorStore:
         tenant_id: str | None = None,
         source_filter_mode: str = "and",
     ) -> list[SearchResult]:
+        """Search stored vectors and apply optional filters."""
         if not self.documents:
             return []
         query_vector = self.embedder.embed(query)
@@ -64,6 +69,7 @@ class InMemoryVectorStore:
         return scored[:top_k]
 
     def _cosine_similarity(self, a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors."""
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(y * y for y in b))
@@ -79,6 +85,7 @@ class InMemoryVectorStore:
         tenant_id: str | None,
         mode: str = "and",
     ) -> bool:
+        """Check metadata against filter constraints."""
         type_matches = True
         name_matches = True
         tenant_matches = True
@@ -101,6 +108,7 @@ class InMemoryVectorStore:
         return tenant_matches and type_matches and name_matches
 
     def stats(self) -> dict[str, int | str]:
+        """Return basic stats for the vector store."""
         return {
             "backend": "memory",
             "document_count": len(self.documents),
@@ -108,6 +116,7 @@ class InMemoryVectorStore:
         }
 
     def health(self) -> dict[str, str | bool]:
+        """Return health information for the vector store."""
         return {
             "backend": "memory",
             "ok": True,
@@ -120,6 +129,7 @@ class InMemoryVectorStore:
         tenant_id: str | None = None,
         source_filter_mode: str = "and",
     ) -> int:
+        """Delete documents matching source filters."""
         if not (source_types or source_names):
             return 0
         allowed_types = {value.lower() for value in source_types or []}

@@ -1,0 +1,96 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 1358 >>
+stream
+BT
+/F1 18 Tf
+72 730 Td
+(Solution Brief - Production-Grade RAG Agent) Tj
+/F1 13 Tf
+0 -16 Td
+(Problem) Tj
+/F1 12 Tf
+0 -16 Td
+(Business knowledge is split across docs, databases, and APIs.) Tj
+0 -16 Td
+(Generic chatbots guess; enterprises need grounded answers.) Tj
+0 -16 Td
+() Tj
+/F1 13 Tf
+0 -16 Td
+(RAG approach) Tj
+/F1 12 Tf
+0 -16 Td
+(1\) Ingest data \(PDF/DOCX/XLSX/CSV/DB/API\)) Tj
+0 -16 Td
+(2\) Embed and store in vector DB \(Milvus or in-memory\)) Tj
+0 -16 Td
+(3\) Retrieve top context and answer only from that context) Tj
+0 -16 Td
+(4\) Refuse if context is insufficient) Tj
+0 -16 Td
+() Tj
+/F1 13 Tf
+0 -16 Td
+(Key capabilities) Tj
+/F1 12 Tf
+0 -16 Td
+(- FastAPI backend with /ingest and /query endpoints) Tj
+0 -16 Td
+(- Multi-tenant isolation + API key roles) Tj
+0 -16 Td
+(- Audit logs and ingestion tracking) Tj
+0 -16 Td
+(- Configurable embeddings \(OpenAI/Gemini/local\)) Tj
+0 -16 Td
+(- Guardrails: no context -> no answer) Tj
+0 -16 Td
+() Tj
+/F1 13 Tf
+0 -16 Td
+(Deliverables) Tj
+/F1 12 Tf
+0 -16 Td
+(- Source code + Docker stack \(Standard/Premium\)) Tj
+0 -16 Td
+(- Configuration guide and deployment notes) Tj
+0 -16 Td
+(- Sample requests, responses, and testing checklist) Tj
+0 -16 Td
+() Tj
+/F1 13 Tf
+0 -16 Td
+(Deployment options) Tj
+/F1 12 Tf
+0 -16 Td
+(- Local Docker, cloud VM, or on-prem) Tj
+0 -16 Td
+(- Milvus + Postgres supported in Premium) Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000059 00000 n 
+0000000117 00000 n 
+0000000244 00000 n 
+0000000315 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1721
+%%EOF

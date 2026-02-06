@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""XLSX loader for spreadsheet ingestion."""
+
 from io import BytesIO
 from typing import Any
 
@@ -7,10 +9,12 @@ from src.rag.types import Document
 
 
 class XlsxLoaderError(RuntimeError):
+    """Raised when XLSX loading fails."""
     pass
 
 
 def load_xlsx_bytes(data: bytes, doc_id: str, source: str) -> Document:
+    """Load an XLSX workbook from bytes into a Document."""
     try:
         from openpyxl import load_workbook
     except ImportError as exc:
@@ -30,6 +34,7 @@ def load_xlsx_bytes(data: bytes, doc_id: str, source: str) -> Document:
 
 
 def _format_cell(value: Any) -> str:
+    """Normalize spreadsheet cell values as strings."""
     if value is None:
         return ""
     return str(value).strip()

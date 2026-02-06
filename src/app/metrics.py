@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Prometheus metrics middleware and handlers."""
+
 import time
 
 from fastapi import Request
@@ -21,6 +23,7 @@ REQUEST_LATENCY = Histogram(
 
 
 async def metrics_middleware(request: Request, call_next):
+    """Record request count and latency for each API call."""
     if not settings.metrics_enabled:
         return await call_next(request)
     path = request.url.path
@@ -39,6 +42,7 @@ async def metrics_middleware(request: Request, call_next):
 
 
 def metrics_response() -> Response:
+    """Return the Prometheus scrape response."""
     if not settings.metrics_enabled:
         return Response(status_code=404)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

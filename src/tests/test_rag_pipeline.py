@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""RAG pipeline behavioral tests."""
+
 from src.rag.answerer import ExtractiveAnswerer
 from src.rag.embeddings import HashEmbedder
 from src.rag.pipeline import RAGPipeline
@@ -8,6 +10,7 @@ from src.vectorstore.inmemory import InMemoryVectorStore
 
 
 def build_pipeline(min_score: float = 0.2) -> RAGPipeline:
+    """Create a test pipeline with in-memory vector store."""
     embedder = HashEmbedder()
     vectorstore = InMemoryVectorStore(embedder=embedder)
     answerer = ExtractiveAnswerer(max_chars=200)
@@ -15,6 +18,7 @@ def build_pipeline(min_score: float = 0.2) -> RAGPipeline:
 
 
 def test_retrieval_returns_grounded_answer() -> None:
+    """Ensure RAG returns grounded answers from context."""
     pipeline = build_pipeline()
     documents = [
         Document(doc_id="sales", content="Q4 sales were 100 units in North India.", metadata={"source": "report"}),
@@ -30,6 +34,7 @@ def test_retrieval_returns_grounded_answer() -> None:
 
 
 def test_empty_context_refuses() -> None:
+    """Ensure missing context triggers a refusal."""
     pipeline = build_pipeline(min_score=0.99)
     response = pipeline.answer("What is the policy on travel?")
 
@@ -39,6 +44,7 @@ def test_empty_context_refuses() -> None:
 
 
 def test_min_score_filters_low_relevance() -> None:
+    """Ensure high min_score filters out weak matches."""
     pipeline = build_pipeline(min_score=0.9)
     documents = [
         Document(doc_id="general", content="General policy document.", metadata={"source": "policy"}),
@@ -53,6 +59,7 @@ def test_min_score_filters_low_relevance() -> None:
 
 
 def test_source_name_weight_reranks() -> None:
+    """Ensure source-name weights can rerank results."""
     pipeline = build_pipeline()
     pipeline.source_name_weights = {"beta": 2.0}
     results = [
@@ -81,6 +88,7 @@ def test_source_name_weight_reranks() -> None:
 
 
 def test_min_score_by_source_overrides_type() -> None:
+    """Ensure source-specific thresholds override type thresholds."""
     pipeline = build_pipeline()
     results = [
         SearchResult(

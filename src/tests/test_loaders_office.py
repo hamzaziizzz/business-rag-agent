@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Loader tests for office document formats."""
+
 from io import BytesIO
 
 from src.loaders.csv_loader import load_csv_bytes
@@ -8,6 +10,7 @@ from src.loaders.xlsx import load_xlsx_bytes
 
 
 def test_load_csv_bytes() -> None:
+    """Ensure CSV bytes load into Document content."""
     data = b"col1,col2\n1,2\n"
     doc = load_csv_bytes(data, doc_id="csv-1", source="data.csv")
     assert "col1" in doc.content
@@ -15,6 +18,7 @@ def test_load_csv_bytes() -> None:
 
 
 def test_load_docx_bytes() -> None:
+    """Ensure DOCX bytes load into Document content."""
     try:
         from docx import Document as DocxDocument
     except ImportError:
@@ -30,6 +34,7 @@ def test_load_docx_bytes() -> None:
 
 
 def test_load_xlsx_bytes() -> None:
+    """Ensure XLSX bytes load into Document content."""
     try:
         from openpyxl import Workbook
     except ImportError:

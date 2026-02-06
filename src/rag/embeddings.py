@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Embedding providers and configuration validation."""
+
 import hashlib
 import math
 import re
@@ -10,21 +12,26 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class EmbeddingError(RuntimeError):
+    """Raised when embeddings fail or are invalid."""
     pass
 
 
 class EmbeddingConfigError(RuntimeError):
+    """Raised when embedding configuration is invalid."""
     pass
 
 
 class EmbeddingProvider(Protocol):
+    """Protocol for embedding providers."""
     dimension: int
 
     def embed(self, text: str) -> list[float]:
+        """Return an embedding vector for the provided text."""
         raise NotImplementedError
 
 
 def validate_vector(vector: list[float], dimension: int) -> list[float]:
+    """Validate and normalize embedding vectors."""
     if len(vector) != dimension:
         raise EmbeddingError(
             f"Embedding dimension mismatch: expected {dimension}, got {len(vector)}"
@@ -41,9 +48,11 @@ def validate_vector(vector: list[float], dimension: int) -> list[float]:
 
 @dataclass
 class HashEmbedder:
+    """Deterministic hash-based embedder for testing or offline use."""
     dimension: int = 256
 
     def embed(self, text: str) -> list[float]:
+        """Embed text using token hashing and L2 normalization."""
         tokens = _TOKEN_RE.findall(text.lower())
         if not tokens:
             return validate_vector([0.0] * self.dimension, self.dimension)
@@ -55,6 +64,7 @@ class HashEmbedder:
         return validate_vector(self._l2_normalize(vector), self.dimension)
 
     def _l2_normalize(self, vector: list[float]) -> list[float]:
+        """Normalize vector magnitude to 1.0."""
         norm = math.sqrt(sum(value * value for value in vector))
         if norm == 0.0:
             return vector
@@ -62,6 +72,7 @@ class HashEmbedder:
 
 
 def resolve_openai_dimension(model: str) -> int | None:
+    """Return expected dimension for OpenAI embedding model."""
     mapping = {
         "text-embedding-3-small": 1536,
         "text-embedding-3-large": 3072,
@@ -71,11 +82,13 @@ def resolve_openai_dimension(model: str) -> int | None:
 
 
 def resolve_gemini_dimension(model: str) -> int | None:
+    """Return expected dimension for Gemini embedding model."""
     return None
 
 
 @dataclass(frozen=True)
 class EmbeddingConfigReport:
+    """Validation report for embedding configuration."""
     provider: str
     model: str | None
     configured_dimension: int
@@ -89,6 +102,7 @@ class EmbeddingConfigReport:
 def build_embedding_config_report(
     provider: str, model: str | None, dimension: int
 ) -> EmbeddingConfigReport:
+    """Build a validation report for embedding settings."""
     normalized = provider.lower().strip()
     expected: int | None = None
 
@@ -246,12 +260,14 @@ def build_embedding_config_report(
 
 @dataclass
 class OpenAIEmbedder:
+    """Embedding provider using OpenAI embeddings API."""
     api_key: str
     model: str
     dimension: int
     client: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        """Validate OpenAI configuration and create a client."""
         if not self.api_key:
             raise EmbeddingConfigError("OPENAI_API_KEY is required for OpenAIEmbedder")
         if not self.model:
@@ -276,6 +292,7 @@ class OpenAIEmbedder:
         self.client = OpenAI(api_key=self.api_key)
 
     def embed(self, text: str) -> list[float]:
+        """Embed text using the OpenAI embeddings API."""
         response = self.client.embeddings.create(model=self.model, input=text)
         vector = list(response.data[0].embedding)
         return validate_vector(vector, self.dimension)
@@ -283,12 +300,14 @@ class OpenAIEmbedder:
 
 @dataclass
 class GeminiEmbedder:
+    """Embedding provider using Gemini embeddings API."""
     api_key: str
     model: str
     dimension: int
     client: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        """Validate Gemini configuration and create a client."""
         if not self.api_key:
             raise EmbeddingConfigError("GEMINI_API_KEY is required for GeminiEmbedder")
         if not self.model:
@@ -301,6 +320,7 @@ class GeminiEmbedder:
         self.client = genai
 
     def embed(self, text: str) -> list[float]:
+        """Embed text using the Gemini embeddings API."""
         result = self.client.embed_content(model=self.model, content=text)
         embedding = None
         if isinstance(result, dict):

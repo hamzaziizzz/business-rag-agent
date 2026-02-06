@@ -1,24 +1,26 @@
 from __future__ import annotations
 
+"""Pydantic request/response schemas for the API."""
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
+    """Request payload for query endpoint."""
     query: str = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     source_types: list[str] | None = None
     source_names: list[str] | None = None
     source_filter_mode: Literal["and", "or"] = "and"
-    route: Literal["rag", "sql", "summarize"] | None = None
+    route: Literal["rag", "summarize"] | None = None
     trace_id: str | None = None
-    sql_query: str | None = None
-    sql_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class SourceChunk(BaseModel):
+    """Chunk returned with relevance score and metadata."""
     document_id: str
     content: str
     metadata: dict[str, Any]
@@ -26,30 +28,46 @@ class SourceChunk(BaseModel):
     highlights: list[str] = Field(default_factory=list)
 
 
+class Citation(BaseModel):
+    """Citation metadata for a returned chunk."""
+    label: str
+    document_id: str
+    source_type: str
+    source_name: str
+
+
 class QueryResponse(BaseModel):
+    """Response payload for query endpoint."""
     answer: str
     sources: list[SourceChunk]
     refusal_reason: str | None = None
     route: str
     request_id: str
+    answerer: str | None = None
+    answerer_reason: str | None = None
     structured: dict[str, Any] | None = None
+    citations: list[Citation] = Field(default_factory=list)
 
 
 class IngestDocument(BaseModel):
+    """Single document payload for ingest."""
     doc_id: str | None = None
     content: str = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class IngestRequest(BaseModel):
+    """Request payload for text ingest."""
     documents: list[IngestDocument]
 
 
 class IngestResponse(BaseModel):
+    """Response payload for ingest requests."""
     ingested: int
 
 
 class StatsResponse(BaseModel):
+    """Vector store stats response."""
     backend: str
     document_count: int
     embedding_dimension: int
@@ -57,6 +75,7 @@ class StatsResponse(BaseModel):
 
 
 class StatsHealthResponse(BaseModel):
+    """Vector store health response."""
     backend: str
     ok: bool
     detail: str | None = None
@@ -64,6 +83,7 @@ class StatsHealthResponse(BaseModel):
 
 
 class EmbeddingHealthResponse(BaseModel):
+    """Embedding configuration health response."""
     provider: str
     model: str | None
     configured_dimension: int
@@ -74,51 +94,14 @@ class EmbeddingHealthResponse(BaseModel):
     action: str | None = None
 
 
-class DBIngestRequest(BaseModel):
-    connection_uri: str = Field(min_length=1)
-    query: str = Field(min_length=1)
-    params: dict[str, Any] = Field(default_factory=dict)
-    limit: int | None = Field(default=None, ge=1, le=10000)
-    source_name: str | None = None
-
-
-class DBTableIngestRequest(BaseModel):
-    connection_uri: str = Field(min_length=1)
-    table: str = Field(min_length=1)
-    columns: list[str] = Field(min_length=1)
-    filters: dict[str, Any] = Field(default_factory=dict)
-    limit: int | None = Field(default=None, ge=1, le=10000)
-    source_name: str | None = None
-
-
-class APIIngestRequest(BaseModel):
-    url: str = Field(min_length=1)
-    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
-    headers: dict[str, str] = Field(default_factory=dict)
-    params: dict[str, Any] = Field(default_factory=dict)
-    json_body: Any | None = None
-    timeout: float | None = Field(default=None, ge=1, le=60)
-    max_bytes: int | None = Field(default=None, ge=1024, le=10_485_760)
-    source_name: str | None = None
-
-
-class ObjectIngestRequest(BaseModel):
-    bucket: str = Field(min_length=1)
-    key: str = Field(min_length=1)
-    source_name: str | None = None
-    endpoint_url: str | None = None
-    region: str | None = None
-    access_key: str | None = None
-    secret_key: str | None = None
-    session_token: str | None = None
-    max_bytes: int | None = Field(default=None, ge=1024)
-
 
 class DeleteSourceRequest(BaseModel):
+    """Request payload for source deletion."""
     source_types: list[str] | None = None
     source_names: list[str] | None = None
     source_filter_mode: Literal["and", "or"] = "and"
 
 
 class DeleteSourceResponse(BaseModel):
+    """Response payload for source deletion."""
     deleted: int

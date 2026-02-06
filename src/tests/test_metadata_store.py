@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+"""Metadata store persistence tests."""
+
 import sqlite3
 
 from src.metadata.store import IngestionMeta, MetadataStore
 
 
 def test_metadata_store_records_lifecycle(tmp_path) -> None:
+    """Ensure metadata store records start and completion."""
     db_path = tmp_path / "meta.db"
     store = MetadataStore(f"sqlite:///{db_path}")
     meta = IngestionMeta(

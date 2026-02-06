@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Guardrails for enforcing context-grounded answers."""
+
 from dataclasses import dataclass
 
 from src.rag.types import ContextChunk
@@ -10,11 +12,13 @@ DEFAULT_REFUSAL = "I don't know based on the provided context."
 
 @dataclass(frozen=True)
 class GuardrailResult:
+    """Guardrail decision for allowing or refusing answers."""
     allowed: bool
     reason: str
 
 
 def require_context(contexts: list[ContextChunk]) -> GuardrailResult:
+    """Require non-empty context for answering."""
     if not contexts:
         return GuardrailResult(allowed=False, reason="no_context")
     if all(not chunk.content.strip() for chunk in contexts):

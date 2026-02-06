@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Tests for tenant isolation and role enforcement."""
+
 import json
 import os
 
@@ -18,12 +20,14 @@ pytestmark = pytest.mark.anyio
 
 
 def get_client() -> httpx.AsyncClient:
+    """Build an ASGI test client."""
     reset_pipeline_cache()
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_reader_cannot_ingest() -> None:
+    """Ensure reader role cannot ingest documents."""
     original = os.environ.get("RAG_API_KEY_MAP")
     os.environ["RAG_API_KEY_MAP"] = json.dumps(
         {
@@ -44,6 +48,7 @@ async def test_reader_cannot_ingest() -> None:
 
 
 async def test_tenant_isolation_in_query() -> None:
+    """Ensure tenant-specific queries only see tenant data."""
     original = os.environ.get("RAG_API_KEY_MAP")
     os.environ["RAG_API_KEY_MAP"] = json.dumps(
         {

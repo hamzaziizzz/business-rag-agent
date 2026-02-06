@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Highlight extraction for query terms in context."""
+
 import re
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]{3,}")
@@ -11,6 +13,7 @@ def build_highlights(
     max_snippets: int = 3,
     window: int = 80,
 ) -> list[str]:
+    """Extract highlighted snippets from content."""
     cleaned = content.strip()
     if not cleaned or not query.strip():
         return []
@@ -39,6 +42,7 @@ def build_highlights(
 
 
 def _ordered_unique_tokens(query: str) -> list[str]:
+    """Return unique query tokens in order of appearance."""
     seen: set[str] = set()
     tokens: list[str] = []
     for token in _TOKEN_RE.findall(query.lower()):

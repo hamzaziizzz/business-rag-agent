@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Audit event storage and hashing utilities."""
+
 import hashlib
 import json
 import uuid
@@ -7,15 +9,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, create_engine
-
 
 class AuditStoreError(RuntimeError):
+    """Raised when audit storage fails."""
     pass
 
 
 @dataclass(frozen=True)
 class AuditEvent:
+    """Audit event payload captured during request processing."""
     event_type: str
     request_id: str
     tenant_id: str
@@ -26,7 +28,16 @@ class AuditEvent:
 
 
 class AuditStore:
+    """Persist audit events to a SQL database."""
     def __init__(self, connection_uri: str) -> None:
+        """Initialize the audit store and ensure tables exist."""
+        try:
+            from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, create_engine
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise AuditStoreError(
+                "sqlalchemy is required to use the audit store"
+            ) from exc
+
         self._engine = create_engine(connection_uri)
         self._metadata = MetaData()
         self._table = Table(
@@ -45,6 +56,7 @@ class AuditStore:
         self._metadata.create_all(self._engine)
 
     def record_event(self, event: AuditEvent) -> None:
+        """Insert a new audit event row."""
         created_at = datetime.now(timezone.utc)
         payload = {
             "id": str(uuid.uuid4()),
@@ -62,6 +74,7 @@ class AuditStore:
 
 
 def hash_actor(api_key: str | None) -> str:
+    """Hash an API key into a short actor token for audit logs."""
     if not api_key:
         return "anonymous"
     digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()

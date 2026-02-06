@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Tests for deleting ingested sources."""
+
 import os
 
 import httpx
@@ -18,12 +20,14 @@ pytestmark = pytest.mark.anyio
 
 
 def get_client() -> httpx.AsyncClient:
+    """Build an ASGI test client."""
     reset_pipeline_cache()
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_delete_by_source() -> None:
+    """Ensure delete endpoint removes documents by source."""
     original = os.environ.get("RAG_API_KEY_MAP")
     os.environ["RAG_API_KEY_MAP"] = '{"admin-key": {"role": "admin", "tenant_id": "default"}}'
     async with get_client() as client:

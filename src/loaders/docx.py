@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+"""DOCX loader for document ingestion."""
+
 from io import BytesIO
 
 from src.rag.types import Document
 
 
 class DocxLoaderError(RuntimeError):
+    """Raised when DOCX loading fails."""
     pass
 
 
 def load_docx_bytes(data: bytes, doc_id: str, source: str) -> Document:
+    """Load a DOCX file from bytes into a Document."""
     try:
         from docx import Document as DocxDocument
     except ImportError as exc:

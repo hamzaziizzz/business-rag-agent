@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Metadata persistence for ingestion events."""
+
 import json
 import uuid
 from dataclasses import dataclass
@@ -7,24 +9,15 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from sqlalchemy import (
-    Column,
-    DateTime,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    Text,
-    create_engine,
-)
-
 
 class MetadataStoreError(RuntimeError):
+    """Raised when metadata persistence fails."""
     pass
 
 
 @dataclass(frozen=True)
 class IngestionMeta:
+    """Ingestion metadata tracked for a single source."""
     source_type: str
     source_name: str
     source_uri: str
@@ -36,7 +29,25 @@ class IngestionMeta:
 
 
 class MetadataStore:
+    """Store ingestion metadata in a SQL database."""
     def __init__(self, connection_uri: str) -> None:
+        """Initialize the metadata store and ensure tables exist."""
+        try:
+            from sqlalchemy import (
+                Column,
+                DateTime,
+                Integer,
+                MetaData,
+                String,
+                Table,
+                Text,
+                create_engine,
+            )
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise MetadataStoreError(
+                "sqlalchemy is required to use the metadata store"
+            ) from exc
+
         self._engine = create_engine(connection_uri)
         self._metadata = MetaData()
         self._table = Table(
@@ -57,6 +68,7 @@ class MetadataStore:
         self._metadata.create_all(self._engine)
 
     def record_start(self, meta: IngestionMeta) -> str:
+        """Create a new ingestion record and return its ID."""
         record_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc)
         payload = self._serialize(meta, created_at, None, record_id)
@@ -65,6 +77,7 @@ class MetadataStore:
         return record_id
 
     def record_complete(self, record_id: str, ingested: int, chunk_count: int) -> None:
+        """Mark a record as completed with counts."""
         completed_at = datetime.now(timezone.utc)
         with self._engine.begin() as conn:
             conn.execute(
@@ -79,6 +92,7 @@ class MetadataStore:
             )
 
     def record_failure(self, record_id: str, error: str) -> None:
+        """Mark a record as failed with an error message."""
         completed_at = datetime.now(timezone.utc)
         with self._engine.begin() as conn:
             conn.execute(
@@ -89,6 +103,7 @@ class MetadataStore:
 
     @staticmethod
     def redact_uri(uri: str) -> str:
+        """Redact credentials from connection URIs before storage."""
         if "://" not in uri:
             return uri
         parsed = urlparse(uri)
@@ -117,6 +132,7 @@ class MetadataStore:
         completed_at: datetime | None,
         record_id: str,
     ) -> dict[str, Any]:
+        """Prepare a metadata row for insertion."""
         extra = None
         if meta.extra:
             extra = json.dumps(meta.extra, ensure_ascii=True, default=str)

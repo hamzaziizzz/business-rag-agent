@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Authentication and API key enforcement tests."""
+
 import os
 
 import httpx
@@ -16,12 +18,14 @@ pytestmark = pytest.mark.anyio
 
 
 def get_client() -> httpx.AsyncClient:
+    """Build an ASGI test client."""
     reset_pipeline_cache()
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_api_key_required_for_query() -> None:
+    """Ensure API keys are required when configured."""
     original = os.environ.get("RAG_API_KEYS")
     os.environ["RAG_API_KEYS"] = "secret"
     try:

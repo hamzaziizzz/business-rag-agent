@@ -6,7 +6,7 @@
 
 ## 1. Project Overview
 
-Modern businesses store critical information across **documents, databases, APIs, and internal tools**, but accessing this data remains slow, fragmented, and error-prone.
+Modern businesses store critical information across **documents**, but accessing this data remains slow, fragmented, and error-prone.
 
 This project delivers a **Custom AI Agent powered by Retrieval-Augmented Generation (RAG)** that allows organizations to query **their own data** securely and accurately using **natural language** — without hallucinations or data leakage.
 
@@ -15,58 +15,15 @@ This project delivers a **Custom AI Agent powered by Retrieval-Augmented Generat
 
 ---
 
-## 2. Core Capabilities
+## 2. Core Capabilities (Basic Package)
 
-### 2.1 Natural Language Querying
+* Document ingestion (PDF/CSV/Markdown/Text)
+* Grounded Q&A (answers only from retrieved context)
+* Source citations and structured JSON output
+* Streamlit demo UI
+* Milvus HNSW + BM25 hybrid search
 
-* Ask questions in **plain English**
-* Supports complex, multi-step queries
-* Context-aware follow-ups
-
-**Examples**
-
-* “Show me last quarter’s sales for North India”
-* “Which employees joined after June 2023?”
-* “Summarize this 120-page policy document”
-
----
-
-### 2.2 Retrieval-Augmented Generation (RAG)
-
-To eliminate hallucinations, the system uses **RAG architecture**:
-
-1. Query understanding
-2. Relevant data retrieval from **Vector DB**
-3. LLM response grounded **only on retrieved data**
-
-✔ Answers are **traceable**
-✔ No guessing
-✔ No fabricated data
-
----
-
-### 2.3 Multi-Source Knowledge Ingestion
-
-The system can ingest and reason over:
-
-#### 📄 Documents
-
-* PDFs
-* Word / Excel files
-* Policies, manuals, reports
-
-#### 🗄 Databases
-
-* PostgreSQL / MySQL
-* ERP / CRM tables
-* Structured business data
-
-#### 🌐 APIs
-
-* Internal REST APIs
-* Third-party services
-
-Each source is **indexed separately** for better precision.
+This branch is **document-only**. All DB/API/object/SQL ingestion paths are removed to keep the system focused and reliable for document RAG.
 
 ---
 
@@ -75,7 +32,7 @@ Each source is **indexed separately** for better precision.
 ```
 User Query
    ↓
-Query Understanding (LangChain)
+Query Understanding
    ↓
 Embedding Generation
    ↓
@@ -90,172 +47,28 @@ Final Answer + Sources
 
 ---
 
-## 4. Technology Stack
+## 4. Technology Stack (Basic Package)
 
-### AI & LLM Layer
-
-* LangChain (Agent + RAG orchestration)
-* Gemini / OpenAI / compatible LLMs
-* Prompt Engineering with guardrails
-
-### Vector Database
-
-* **Milvus** (high-performance vector search)
-* Metadata-aware filtering
-* Namespace isolation per data source
-
-### Backend & APIs
-
-* Python (FastAPI)
-* Secure REST endpoints
-* Auth & access control
-
-### Storage
-
-* PostgreSQL (logs, configs, metadata)
-* Object storage (documents)
-
-### Deployment
-
-* Dockerized services
-* On-prem / Cloud / Hybrid
-* Optional GPU acceleration
+* FastAPI backend
+* Milvus vector database (HNSW + BM25 hybrid)
+* LLM providers: Ollama / OpenAI / Gemini (pluggable)
+* Streamlit demo UI
 
 ---
 
-## 12. Deployment & Ops
+## 5. Quick Start
 
-### Docker Compose (Full Stack)
+Follow the Basic Package guide:
+
+* `fiverr_assets/basic_package.md`
+
+---
+
+## 6. Milvus Reset (Document-Only)
+
+If you change schema (e.g., enable HNSW + BM25 hybrid), drop and recreate the collection and re-ingest documents.
 
 ```
-docker compose up --build
+/home/hamza/.local/share/virtualenvs/business-rag-agent-C7T_qDqk/bin/python3 \
+  tools/reset_milvus_collection.py --collection business_documents
 ```
-
-Services included:
-- API (`api`)
-- Milvus + etcd + MinIO (`milvus`, `etcd`, `minio`)
-- Postgres (`postgres`)
-- Prometheus + Grafana (`prometheus`, `grafana`)
-
-### Monitoring
-
-* Prometheus scrapes `/metrics` from the API
-* Grafana provisioned with Prometheus datasource
-
-### CI
-
-* GitHub Actions runs tests and linting on pushes/PRs
-
----
-
-## 5. Accuracy & Hallucination Control (Key Differentiator)
-
-Unlike typical AI bots, this system includes:
-
-### ✅ Grounded Responses
-
-* LLM can only answer from retrieved context
-* No free-form guessing
-
-### ✅ Schema & Context Awareness
-
-* Field-level validation
-* Business terminology mapping
-
-### ✅ Confidence-Based Fallbacks
-
-* If confidence < threshold → asks clarification
-* Prevents wrong answers
-
----
-
-## 6. Security & Data Privacy
-
-Designed for **enterprise environments**:
-
-* No training on client data
-* Data never shared across tenants
-* Role-based access control
-* Optional on-prem deployment
-* Full audit logs of queries
-
----
-
-## 7. Deliverables
-
-Depending on package selection:
-
-### Core Deliverables
-
-* Custom AI Agent (RAG-based)
-* Knowledge ingestion pipeline
-* Vector database setup
-* Secure API backend
-* Query logs & analytics
-
-### Optional Add-Ons
-
-* Web UI / Dashboard
-* Voice interface
-* SQL-aware querying
-* Multi-language support
-* Edge or private deployment
-
----
-
-## 8. Use Cases
-
-This system is ideal for:
-
-* **Enterprises** (internal knowledge assistant)
-* **SMEs** (ERP / CRM querying)
-* **Educational institutions**
-* **Legal & compliance teams**
-* **Customer support analytics**
-* **HR & operations dashboards**
-
----
-
-## 9. Fiverr Package Mapping (Recommended)
-
-### 🟢 Basic – Proof of Concept
-
-* Single data source (PDF / DB)
-* RAG pipeline
-* API access
-* Ideal for validation
-
-### 🔵 Standard – Business-Ready System
-
-* Multiple data sources
-* Milvus vector DB
-* Hallucination control
-* Secure API backend
-
-### 🔴 Premium – Enterprise Deployment
-
-* Full agent orchestration
-* Role-based access
-* On-prem / cloud deployment
-* Monitoring & optimization
-
----
-
-## 10. Why Choose Me
-
-* Real **production AI experience**
-* Built **RAG + SQL + Vector DB systems** in enterprise settings
-* Focus on **accuracy, not hype**
-* Strong background in **MLOps, deployment, and scaling**
-* Systems designed for **real users, real data, real consequences** 
-
----
-
-## 11. What This Is NOT
-
-❌ No ChatGPT wrappers <br>
-❌ No fake “AI agents” <br>
-❌ No hallucinating bots <br>
-❌ No insecure data handling <br>
-
-This is a **serious AI system for serious businesses**.

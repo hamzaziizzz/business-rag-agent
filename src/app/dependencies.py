@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Dependency providers and shared singletons for the app."""
+
 from functools import lru_cache
 
 from src.app.settings import settings
@@ -13,6 +15,7 @@ from src.rag.embeddings import (
     build_embedding_config_report,
     EmbeddingConfigReport,
 )
+from src.rag.rewriter import QueryRewriter, build_rewriter
 from src.rag.pipeline import RAGPipeline
 from src.metadata.store import MetadataStore
 from src.metadata.audit import AuditStore
@@ -22,6 +25,7 @@ from src.vectorstore.milvus import MilvusConfig, MilvusVectorStore
 
 @lru_cache
 def get_pipeline() -> RAGPipeline:
+    """Build or return the cached RAG pipeline."""
     embedder = build_embedder()
     vectorstore = build_vectorstore(embedder)
     answerer = ExtractiveAnswerer()
@@ -38,11 +42,13 @@ def get_pipeline() -> RAGPipeline:
 
 
 def reset_pipeline_cache() -> None:
+    """Clear cached pipeline to force rebuild."""
     get_pipeline.cache_clear()
 
 
 @lru_cache
 def get_metadata_store() -> MetadataStore | None:
+    """Return the metadata store if configured."""
     if not settings.metadata_db_uri:
         return None
     return MetadataStore(settings.metadata_db_uri)
@@ -50,6 +56,7 @@ def get_metadata_store() -> MetadataStore | None:
 
 @lru_cache
 def get_audit_store() -> AuditStore | None:
+    """Return the audit store if configured."""
     if settings.audit_db_uri:
         return AuditStore(settings.audit_db_uri)
     if settings.metadata_db_uri:
@@ -58,6 +65,7 @@ def get_audit_store() -> AuditStore | None:
 
 
 def get_embedding_config_report() -> EmbeddingConfigReport:
+    """Return a report describing embedding configuration health."""
     provider = settings.embedding_provider
     model = None
     if provider.lower().strip() == "openai":
@@ -67,7 +75,14 @@ def get_embedding_config_report() -> EmbeddingConfigReport:
     return build_embedding_config_report(provider, model, settings.embedding_dimension)
 
 
+@lru_cache
+def get_query_rewriter() -> QueryRewriter:
+    """Return a cached query rewriter instance."""
+    return build_rewriter()
+
+
 def build_embedder() -> EmbeddingProvider:
+    """Construct the embedding provider from settings."""
     provider = settings.embedding_provider.lower().strip()
     if provider == "hash":
         return HashEmbedder(dimension=settings.embedding_dimension)
@@ -89,6 +104,7 @@ def build_embedder() -> EmbeddingProvider:
 
 
 def build_vectorstore(embedder: EmbeddingProvider) -> InMemoryVectorStore | MilvusVectorStore:
+    """Construct the vector store backend based on settings."""
     backend = settings.vectorstore_backend.lower().strip()
     if backend == "milvus":
         config = MilvusConfig(
@@ -100,6 +116,11 @@ def build_vectorstore(embedder: EmbeddingProvider) -> InMemoryVectorStore | Milv
             metric_type=settings.milvus_metric_type,
             nlist=settings.milvus_nlist,
             nprobe=settings.milvus_nprobe,
+            hnsw_m=settings.milvus_hnsw_m,
+            hnsw_ef_construction=settings.milvus_hnsw_ef_construction,
+            hnsw_ef=settings.milvus_hnsw_ef,
+            sparse_index_algo=settings.milvus_sparse_index_algo,
+            hybrid_search=settings.hybrid_search_enabled,
         )
         return MilvusVectorStore(embedder=embedder, config=config)
     return InMemoryVectorStore(embedder=embedder)

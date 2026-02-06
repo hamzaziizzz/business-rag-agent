@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Formatters for structured outputs and DB-style summaries."""
+
 import json
 from typing import Any
 
@@ -11,6 +13,7 @@ def format_db_answer(
     max_items: int = 3,
     max_field_chars: int = 200,
 ) -> str | None:
+    """Format records into a short announcement-style answer."""
     records = extract_db_records(contexts, max_items=max_items)
     if not records:
         return None
@@ -31,6 +34,7 @@ def extract_db_records(
     contexts: list[ContextChunk],
     max_items: int = 10,
 ) -> list[dict[str, Any]]:
+    """Extract JSON records from context chunks."""
     records: list[dict[str, Any]] = []
     if not contexts:
         return records
@@ -50,6 +54,7 @@ def extract_db_records(
 
 
 def _format_record(record: dict[str, Any], max_field_chars: int) -> str:
+    """Format a single record into a compact string."""
     headline = _first_value(record, ["headline", "title", "NEWSSUB", "HEADLINE"])
     company = _first_value(record, ["company_name", "SLONGNAME", "COMPANY"])
     category = _first_value(record, ["category", "CATEGORYNAME"])
@@ -77,6 +82,7 @@ def _format_record(record: dict[str, Any], max_field_chars: int) -> str:
 
 
 def _first_value(record: dict[str, Any], keys: list[str]) -> str | None:
+    """Return the first non-empty value for the provided keys."""
     for key in keys:
         value = record.get(key)
         if value is None:
@@ -88,12 +94,14 @@ def _first_value(record: dict[str, Any], keys: list[str]) -> str | None:
 
 
 def _truncate(text: str, limit: int) -> str:
+    """Trim text to the character limit without cutting words."""
     if len(text) <= limit:
         return text
     return text[:limit].rsplit(" ", 1)[0] + "..."
 
 
 def _extract_json(text: str) -> Any | None:
+    """Parse JSON content embedded in text if possible."""
     cleaned = text.strip()
     if not cleaned:
         return None
@@ -121,6 +129,7 @@ def _extract_json(text: str) -> Any | None:
 
 
 def _combine_db_chunks(contexts: list[ContextChunk]) -> list[str]:
+    """Reassemble split DB chunks into complete JSON strings."""
     grouped: dict[str, list[ContextChunk]] = {}
     fallback: list[str] = []
 
@@ -144,6 +153,81 @@ def _combine_db_chunks(contexts: list[ContextChunk]) -> list[str]:
 
 
 def _base_doc_id(doc_id: str) -> str:
+    """Strip chunk suffix from a document ID."""
     if "-" not in doc_id:
         return doc_id
     return doc_id.rsplit("-", 1)[0]
+
+
+def build_bullet_summary(
+    contexts: list[ContextChunk],
+    max_items: int = 5,
+    max_chars: int = 160,
+) -> list[str]:
+    """Build a bullet list summary from context chunks."""
+    if not contexts:
+        return []
+    sentences = _extract_sentences(contexts)
+    bullets: list[str] = []
+    for sentence in sentences:
+        cleaned = sentence.strip()
+        if not cleaned:
+            continue
+        bullets.append(_truncate(cleaned, max_chars))
+        if len(bullets) >= max_items:
+            break
+    return bullets
+
+
+def build_json_summary(
+    contexts: list[ContextChunk],
+    max_items: int = 5,
+    max_chars: int = 160,
+) -> dict[str, object] | None:
+    """Build a JSON summary payload from context chunks."""
+    bullets = build_bullet_summary(
+        contexts,
+        max_items=max_items,
+        max_chars=max_chars,
+    )
+    if not bullets:
+        return None
+    summary = bullets[0]
+    return {"summary": summary, "points": bullets}
+
+
+def _extract_sentences(contexts: list[ContextChunk], min_chars: int = 20) -> list[str]:
+    """Extract candidate sentences from context chunks."""
+    text = " ".join(chunk.content.strip() for chunk in contexts if chunk.content.strip())
+    if not text:
+        return []
+    parts = []
+    start = 0
+    for idx, char in enumerate(text):
+        if char in ".!?":
+            segment = text[start : idx + 1].strip()
+            if segment:
+                parts.append(segment)
+            start = idx + 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    merged: list[str] = []
+    buffer = ""
+    for part in parts:
+        segment = part.strip()
+        if not segment:
+            continue
+        if len(segment) < min_chars:
+            buffer = f"{buffer} {segment}".strip()
+            continue
+        if buffer:
+            segment = f"{buffer} {segment}".strip()
+            buffer = ""
+        merged.append(segment)
+    if buffer:
+        if merged:
+            merged[-1] = f"{merged[-1]} {buffer}".strip()
+        else:
+            merged.append(buffer)
+    return merged
