@@ -12,7 +12,7 @@ os.environ["EMBEDDING_PROVIDER"] = "hash"
 os.environ["EMBEDDING_DIMENSION"] = "256"
 
 from src.app.dependencies import reset_pipeline_cache
-from src.app.main import app, role_system_prompt_for_tests
+from src.app.main import app
 from src.app.settings import settings
 
 pytestmark = pytest.mark.anyio
@@ -89,13 +89,3 @@ async def test_llm_router_fallback_to_rules() -> None:
         for key, value in original.items():
             object.__setattr__(settings, key, value)
 
-
-def test_role_based_prompt_selection() -> None:
-    """Ensure role-based prompts differ by role."""
-    admin_prompt = role_system_prompt_for_tests("admin")
-    writer_prompt = role_system_prompt_for_tests("writer")
-    reader_prompt = role_system_prompt_for_tests("reader")
-    assert admin_prompt != writer_prompt != reader_prompt
-    assert "detailed" in admin_prompt
-    assert "actionable" in writer_prompt
-    assert "concise" in reader_prompt

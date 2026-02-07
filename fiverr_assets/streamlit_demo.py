@@ -73,14 +73,6 @@ def _render_response(response: httpx.Response) -> None:
     if answer:
         st.markdown("**Answer**")
         st.write(answer)
-    answerer = payload.get("answerer")
-    if answerer:
-        st.markdown("**Answerer**")
-        st.write(answerer)
-    answerer_reason = payload.get("answerer_reason")
-    if answerer_reason:
-        st.markdown("**Answerer Reason**")
-        st.write(answerer_reason)
     citations = payload.get("citations") or []
     if citations:
         st.markdown("**Citations**")
@@ -152,10 +144,6 @@ with tab_chat:
             st.session_state.chat_messages.append({"role": "assistant", "content": answer})
             with st.chat_message("assistant"):
                 st.write(answer)
-                if result.get("answerer"):
-                    st.caption(f"Answerer: {result.get('answerer')}")
-                if result.get("answerer_reason"):
-                    st.caption(f"Reason: {result.get('answerer_reason')}")
                 citations = result.get("citations") or []
                 if citations:
                     st.markdown("**Citations**")

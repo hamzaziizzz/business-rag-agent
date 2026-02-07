@@ -194,22 +194,9 @@ def _build_structured_payload(
     return None
 
 
-def _role_system_prompt(role: str) -> str:
-    """Augment the base system prompt with role-specific guidance."""
-    base = base_system_prompt()
-    role_normalized = role.strip().lower()
-    if role_normalized == "admin":
-        addon = "Provide detailed, complete answers with full context coverage."
-    elif role_normalized == "writer":
-        addon = "Focus on actionable, clear steps and policy-aligned guidance."
-    else:
-        addon = "Keep answers concise and easy to scan."
-    return f"{base} {addon}"
-
-
-def role_system_prompt_for_tests(role: str) -> str:
-    """Expose role prompt generation for tests."""
-    return _role_system_prompt(role)
+def _standard_system_prompt() -> str:
+    """Return the standard system prompt."""
+    return base_system_prompt()
 
 
 def _log_top_scores(request_id: str, results: list["SearchResult"], limit: int = 5) -> None:
@@ -632,7 +619,7 @@ async def query(
         retrieval_query = normalize_query_tokens(
             retrieval_query, encoding_name=settings.tokenizer_encoding
         )
-    role_prompt = _role_system_prompt(auth.role)
+    role_prompt = _standard_system_prompt()
     effective_min_score_by_type = (
         settings.min_score_by_type if request.min_score is None else {}
     )
@@ -733,8 +720,6 @@ async def query(
                 refusal_reason=guardrail.reason,
                 route="summarize",
                 request_id=request_id,
-                answerer="guardrail",
-                answerer_reason=guardrail.reason,
             )
         else:
             allowed, gate_reason = await _llm_context_gate(
@@ -747,8 +732,6 @@ async def query(
                     refusal_reason=gate_reason or "insufficient_context",
                     route="summarize",
                     request_id=request_id,
-                    answerer="llm_gate",
-                    answerer_reason=gate_reason or "insufficient_context",
                 )
                 logger.info(
                     "query_completed",
@@ -853,8 +836,6 @@ async def query(
                     refusal_reason=llm_refusal_reason or "empty_answer",
                     route="summarize",
                     request_id=request_id,
-                    answerer="llm" if settings.answerer_mode.lower() == "llm" else "summarize",
-                    answerer_reason=llm_refusal_reason or "empty_answer",
                 )
             else:
                 ordered_contexts = order_contexts(contexts, preferred_source_ids)
@@ -877,12 +858,6 @@ async def query(
                     request_id=request_id,
                     structured=structured,
                     citations=citations,
-                    answerer="llm" if llm_used else "summarize",
-                    answerer_reason=(
-                        None
-                        if llm_used
-                        else (llm_refusal_reason or "fallback")
-                    ),
                 )
         logger.info(
             "query_completed",
@@ -945,8 +920,6 @@ async def query(
                 refusal_reason=guardrail.reason,
                 route="rag",
                 request_id=request_id,
-                answerer="guardrail",
-                answerer_reason=guardrail.reason,
             )
             _record_audit_event(
                 AuditEvent(
@@ -980,8 +953,6 @@ async def query(
                 refusal_reason=gate_reason or "insufficient_context",
                 route="rag",
                 request_id=request_id,
-                answerer="llm_gate",
-                answerer_reason=gate_reason or "insufficient_context",
             )
             _record_audit_event(
                 AuditEvent(
@@ -1097,12 +1068,6 @@ async def query(
             request_id=request_id,
             structured=structured,
             citations=citations,
-            answerer="llm" if llm_used else "extractive",
-            answerer_reason=(
-                None
-                if llm_used
-                else (llm_refusal_reason or "fallback")
-            ),
         )
         _record_audit_event(
             AuditEvent(
@@ -1181,8 +1146,6 @@ async def query(
         request_id=request_id,
         structured=structured,
         citations=citations,
-        answerer="extractive",
-        answerer_reason=None if not result.refusal_reason else result.refusal_reason,
     )
     _record_audit_event(
         AuditEvent(
@@ -1229,8 +1192,6 @@ async def chat(
             refusal_reason="empty_messages",
             route="chat",
             request_id=request_id,
-            answerer="guardrail",
-            answerer_reason="empty_messages",
         )
     last_user = next((m.content for m in reversed(messages) if m.role == "user"), "").strip()
     if not last_user:
@@ -1240,8 +1201,6 @@ async def chat(
             refusal_reason="empty_query",
             route="chat",
             request_id=request_id,
-            answerer="guardrail",
-            answerer_reason="empty_query",
         )
     history = _slice_history(messages, settings.chat_history_turns)
     decision = await router.route_chat_async(last_user, history)
@@ -1260,8 +1219,6 @@ async def chat(
             refusal_reason=decision.reason,
             route="chat",
             request_id=request_id,
-            answerer="llm_router",
-            answerer_reason=decision.reason,
         )
 
     pipeline = get_pipeline()
@@ -1304,8 +1261,6 @@ async def chat(
             refusal_reason=guardrail.reason,
             route="chat",
             request_id=request_id,
-            answerer="guardrail",
-            answerer_reason=guardrail.reason,
         )
     allowed, gate_reason = await _llm_context_gate(
         last_user, contexts, request_id
@@ -1317,8 +1272,6 @@ async def chat(
             refusal_reason=gate_reason or "insufficient_context",
             route="chat",
             request_id=request_id,
-            answerer="llm_gate",
-            answerer_reason=gate_reason or "insufficient_context",
         )
 
     is_db = contexts and all(
@@ -1331,7 +1284,7 @@ async def chat(
     preferred_source_ids: list[str] | None = None
     llm_used = False
     fallback_used = False
-    role_prompt = _role_system_prompt(auth.role)
+    role_prompt = _standard_system_prompt()
     try:
         llm = build_llm_answerer(
             settings.llm_provider,
@@ -1386,8 +1339,6 @@ async def chat(
             refusal_reason=llm_refusal_reason or "empty_answer",
             route="chat",
             request_id=request_id,
-            answerer="llm",
-            answerer_reason=llm_refusal_reason or "empty_answer",
         )
 
     ordered_contexts = order_contexts(contexts, preferred_source_ids)
@@ -1401,9 +1352,6 @@ async def chat(
         )
         for chunk in ordered_contexts
     ]
-    answerer = "llm" if llm_used else "extractive"
-    if fallback_used and not llm_used:
-        answerer = "extractive"
     answer, citations = _apply_citations(answer, ordered_contexts, None)
     return ChatResponse(
         answer=answer,
@@ -1413,6 +1361,4 @@ async def chat(
         request_id=request_id,
         structured=structured,
         citations=citations,
-        answerer=answerer,
-        answerer_reason=None if llm_used else (llm_refusal_reason or "fallback"),
     )

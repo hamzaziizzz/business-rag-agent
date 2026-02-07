@@ -43,8 +43,6 @@ class QueryResponse(BaseModel):
     refusal_reason: str | None = None
     route: str
     request_id: str
-    answerer: str | None = None
-    answerer_reason: str | None = None
     structured: dict[str, Any] | None = None
     citations: list[Citation] = Field(default_factory=list)
 
@@ -73,8 +71,6 @@ class ChatResponse(BaseModel):
     refusal_reason: str | None = None
     route: str
     request_id: str
-    answerer: str | None = None
-    answerer_reason: str | None = None
     structured: dict[str, Any] | None = None
     citations: list[Citation] = Field(default_factory=list)
 
