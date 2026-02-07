@@ -118,14 +118,57 @@ with st.sidebar:
         else:
             st.error(message)
 
-tab_query, tab_ingest, tab_upload = st.tabs(["Query", "Ingest Text", "Upload Files"])
+tab_chat, tab_query, tab_ingest, tab_upload = st.tabs(
+    ["Chat", "Query", "Ingest Text", "Upload Files"]
+)
+
+with tab_chat:
+    st.subheader("Chat")
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    if st.button("Clear Chat"):
+        st.session_state.chat_messages = []
+
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+
+    prompt = st.chat_input("Ask a question grounded in your documents...")
+    if prompt:
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.write(prompt)
+
+        timeout = None if request_timeout == 0 else float(request_timeout)
+        payload = {
+            "messages": st.session_state.chat_messages,
+            "top_k": 4,
+        }
+        try:
+            response = _post_json(api_url, "/chat", payload, api_key, timeout)
+            result = response.json()
+            answer = result.get("answer", "")
+            st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+            with st.chat_message("assistant"):
+                st.write(answer)
+                if result.get("answerer"):
+                    st.caption(f"Answerer: {result.get('answerer')}")
+                if result.get("answerer_reason"):
+                    st.caption(f"Reason: {result.get('answerer_reason')}")
+                citations = result.get("citations") or []
+                if citations:
+                    st.markdown("**Citations**")
+                    st.json(citations)
+        except httpx.HTTPError as exc:
+            st.error(f"API connection failed: {exc}")
 
 with tab_query:
     st.subheader("Ask a Question")
     query = st.text_area("Query", placeholder="Ask a question about your data...")
     top_k = st.slider("Top K", min_value=1, max_value=20, value=4)
     min_score = st.slider("Min Score Threshold", min_value=0.0, max_value=1.0, value=0.35, step=0.01)
-    route = st.selectbox("Route", ["auto", "rag", "summarize", "sql"], index=0)
+    route = st.selectbox("Route", ["auto", "rag", "summarize"], index=0)
     if st.button("Run Query", type="primary"):
         try:
             payload: dict[str, Any] = {"query": query, "top_k": top_k, "min_score": min_score}

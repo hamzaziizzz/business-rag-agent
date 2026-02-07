@@ -77,14 +77,20 @@ class OllamaAnswerer:
     context_max_chars: int
     system_prompt: str = _SYSTEM_PROMPT
 
-    async def generate(self, query: str, contexts: list[ContextChunk]) -> LLMResult:
+    async def generate(
+        self,
+        query: str,
+        contexts: list[ContextChunk],
+        history: list[dict[str, str]] | None = None,
+    ) -> LLMResult:
         """Generate a grounded answer using Ollama."""
         if not contexts:
             return LLMResult(answer="", refusal_reason="no_context", source_ids=[], raw="")
         async def _request(system_prompt: str, context_limit: int) -> str:
             context_block = _build_context_block(contexts, context_limit)
+            history_block = _format_history(history)
             user_prompt = (
-                f"Question: {query}\n\n"
+                f"{history_block}Question: {query}\n\n"
                 f"Context:\n{context_block}\n\n"
                 "Instructions: Use only the context above to answer. "
                 "Respond with JSON only."
@@ -162,14 +168,20 @@ class OpenAIAnswerer:
     context_max_chars: int
     system_prompt: str = _SYSTEM_PROMPT
 
-    async def generate(self, query: str, contexts: list[ContextChunk]) -> LLMResult:
+    async def generate(
+        self,
+        query: str,
+        contexts: list[ContextChunk],
+        history: list[dict[str, str]] | None = None,
+    ) -> LLMResult:
         """Generate a grounded answer using OpenAI chat completions."""
         if not contexts:
             return LLMResult(answer="", refusal_reason="no_context", source_ids=[], raw="")
         async def _request(system_prompt: str, context_limit: int) -> str:
             context_block = _build_context_block(contexts, context_limit)
+            history_block = _format_history(history)
             user_prompt = (
-                f"Question: {query}\n\n"
+                f"{history_block}Question: {query}\n\n"
                 f"Context:\n{context_block}\n\n"
                 "Instructions: Use only the context above to answer. "
                 "Respond with JSON only."
@@ -252,7 +264,12 @@ class GeminiAnswerer:
     context_max_chars: int
     system_prompt: str = _SYSTEM_PROMPT
 
-    async def generate(self, query: str, contexts: list[ContextChunk]) -> LLMResult:
+    async def generate(
+        self,
+        query: str,
+        contexts: list[ContextChunk],
+        history: list[dict[str, str]] | None = None,
+    ) -> LLMResult:
         """Generate a grounded answer using Gemini."""
         if not contexts:
             return LLMResult(answer="", refusal_reason="no_context", source_ids=[], raw="")
@@ -263,8 +280,10 @@ class GeminiAnswerer:
 
         async def _request(system_prompt: str, context_limit: int) -> str:
             context_block = _build_context_block(contexts, context_limit)
+            history_block = _format_history(history)
             prompt = (
                 f"{system_prompt}\n\n"
+                f"{history_block}"
                 f"Question: {query}\n\n"
                 f"Context:\n{context_block}\n\n"
                 "Instructions: Use only the context above to answer. "
@@ -348,6 +367,25 @@ def _build_context_block(contexts: list[ContextChunk], max_chars: int) -> str:
         if total >= max_chars:
             break
     return "\n\n".join(chunks)
+
+
+def _format_history(history: list[dict[str, str]] | None) -> str:
+    """Format chat history for inclusion in prompts."""
+    if not history:
+        return ""
+    lines: list[str] = []
+    for item in history:
+        role = item.get("role", "user").strip().lower()
+        content = item.get("content", "").strip()
+        if not content:
+            continue
+        if role not in {"user", "assistant", "system"}:
+            role = "user"
+        label = role.capitalize()
+        lines.append(f"{label}: {content}")
+    if not lines:
+        return ""
+    return "Conversation so far:\n" + "\n".join(lines) + "\n\n"
 
 
 def _parse_json_response(content: str) -> dict[str, object]:

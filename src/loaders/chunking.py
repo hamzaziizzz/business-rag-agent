@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Text normalization and chunking utilities (char and token based)."""
 
+import os
 import re
 
 from src.rag.types import Document
@@ -19,6 +20,8 @@ def normalize_query_tokens(text: str, encoding_name: str = "cl100k_base") -> str
     cleaned = normalize_text(text)
     if not cleaned:
         return ""
+    if os.getenv("RAG_DISABLE_TIKTOKEN", "false").strip().lower() in {"1", "true", "yes"}:
+        return cleaned
     try:
         import tiktoken
     except ImportError:  # pragma: no cover - optional dependency
@@ -69,6 +72,8 @@ def chunk_text_tokens(
         return []
     if max_tokens <= 0:
         return [cleaned]
+    if os.getenv("RAG_DISABLE_TIKTOKEN", "false").strip().lower() in {"1", "true", "yes"}:
+        return chunk_text(cleaned, max_chars=1000, overlap=0)
     if overlap >= max_tokens:
         overlap = max(0, max_tokens // 4)
     step = max_tokens - overlap

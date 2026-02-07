@@ -103,6 +103,7 @@ class Settings:
     log_level: str = os.getenv("RAG_LOG_LEVEL", "INFO")
     metadata_db_uri: str | None = os.getenv("RAG_METADATA_DB_URI")
     audit_db_uri: str | None = os.getenv("RAG_AUDIT_DB_URI")
+    chat_history_turns: int = int(os.getenv("RAG_CHAT_HISTORY_TURNS", "6"))
 
 
     @property

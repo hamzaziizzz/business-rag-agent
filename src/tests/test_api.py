@@ -174,3 +174,35 @@ async def test_query_routing_summarize() -> None:
     payload = response.json()
     assert payload["route"] == "summarize"
     assert payload["answer"].startswith("Summary based on the provided context")
+
+
+async def test_chat_endpoint() -> None:
+    """Ensure chat endpoint returns grounded answers."""
+    async with get_client() as client:
+        ingest_response = await client.post(
+            "/ingest",
+            json={
+                "documents": [
+                    {
+                        "doc_id": "handbook",
+                        "content": "Employee handbook: travel requests need manager approval.",
+                        "metadata": {"source": "handbook"},
+                    }
+                ]
+            },
+        )
+        assert ingest_response.status_code == 200
+        chat_response = await client.post(
+            "/chat",
+            json={
+                "messages": [
+                    {"role": "user", "content": "What do travel requests require?"},
+                ],
+                "top_k": 3,
+            },
+        )
+    assert chat_response.status_code == 200
+    payload = chat_response.json()
+    assert payload["answer"]
+    assert payload["route"] == "chat"
+    assert payload["request_id"]

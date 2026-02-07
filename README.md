@@ -19,6 +19,7 @@ This project delivers a **Custom AI Agent powered by Retrieval-Augmented Generat
 
 * Document ingestion (PDF/CSV/Markdown/Text)
 * Grounded Q&A (answers only from retrieved context)
+* Multi-turn grounded chat (strict RAG)
 * Source citations and structured JSON output
 * Streamlit demo UI
 * Milvus HNSW + BM25 hybrid search
@@ -61,6 +62,7 @@ Final Answer + Sources
 Follow the Basic Package guide:
 
 * `fiverr_assets/basic_package.md`
+* `docs/standard_package.md` (Standard package checklist)
 
 ---
 

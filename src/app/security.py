@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Authentication and tenant resolution helpers."""
 
+import os
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
@@ -22,8 +23,9 @@ async def require_api_key(request: Request) -> AuthContext:
     api_key = _extract_api_key(request)
     key_map = settings.api_key_map
     allowed = settings.api_keys
+    allow_anonymous = os.getenv("RAG_ALLOW_ANONYMOUS", "false").lower() in {"1", "true", "yes"}
     if not (key_map or allowed):
-        if settings.allow_anonymous:
+        if allow_anonymous:
             return AuthContext(api_key=None, role="admin", tenant_id=settings.default_tenant_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

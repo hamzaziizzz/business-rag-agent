@@ -25,6 +25,9 @@ from src.app.schemas import (
     DeleteSourceResponse,
     IngestRequest,
     IngestResponse,
+    ChatRequest,
+    ChatResponse,
+    ChatMessage,
     QueryRequest,
     QueryResponse,
     SourceChunk,
@@ -153,6 +156,14 @@ async def _llm_context_gate(
         },
     )
     return result.sufficient, result.reason
+
+
+def _slice_history(messages: list[ChatMessage], max_turns: int) -> list[dict[str, str]]:
+    """Return the most recent chat turns formatted for prompts."""
+    if not messages:
+        return []
+    trimmed = messages[-max_turns:] if max_turns > 0 else messages
+    return [{"role": msg.role, "content": msg.content} for msg in trimmed]
 
 
 def _apply_citations(
@@ -1198,3 +1209,210 @@ async def query(
         },
     )
     return response
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
+    http_request: Request,
+    auth: AuthContext = Depends(require_api_key),
+) -> ChatResponse:
+    """Chat endpoint for multi-turn RAG conversations."""
+    require_roles(auth, {"reader", "writer", "admin"})
+    request_id = request.trace_id or getattr(http_request.state, "request_id", str(uuid.uuid4()))
+    tenant_id = resolve_tenant_id(http_request, auth)
+    messages = request.messages or []
+    if not messages:
+        return ChatResponse(
+            answer=DEFAULT_REFUSAL,
+            sources=[],
+            refusal_reason="empty_messages",
+            route="chat",
+            request_id=request_id,
+            answerer="guardrail",
+            answerer_reason="empty_messages",
+        )
+    last_user = next((m.content for m in reversed(messages) if m.role == "user"), "").strip()
+    if not last_user:
+        return ChatResponse(
+            answer=DEFAULT_REFUSAL,
+            sources=[],
+            refusal_reason="empty_query",
+            route="chat",
+            request_id=request_id,
+            answerer="guardrail",
+            answerer_reason="empty_query",
+        )
+    history = _slice_history(messages, settings.chat_history_turns)
+    decision = await router.route_chat_async(last_user, history)
+    logger.info(
+        "chat_retrieval_decision",
+        extra={
+            "request_id": request_id,
+            "retrieve": decision.retrieve,
+            "reason": decision.reason,
+        },
+    )
+    if not decision.retrieve:
+        return ChatResponse(
+            answer=DEFAULT_REFUSAL,
+            sources=[],
+            refusal_reason=decision.reason,
+            route="chat",
+            request_id=request_id,
+            answerer="llm_router",
+            answerer_reason=decision.reason,
+        )
+
+    pipeline = get_pipeline()
+    retrieval_query, rewrite_applied = await _rewrite_query(last_user)
+    retrieval_query = normalize_query_tokens(
+        retrieval_query, encoding_name=settings.tokenizer_encoding
+    )
+    base_limit = request.top_k or pipeline.max_chunks
+    retrieval_limit = base_limit
+    if request.source_types or request.source_names:
+        retrieval_limit = min(base_limit * 5, 50)
+    results = pipeline.retrieve(
+        retrieval_query,
+        top_k=retrieval_limit,
+        source_types=request.source_types,
+        source_names=request.source_names,
+        tenant_id=tenant_id,
+        source_filter_mode=request.source_filter_mode,
+    )
+    _log_top_scores(request_id, results)
+    effective_min_score_by_type = settings.min_score_by_type if request.min_score is None else {}
+    effective_min_score_by_source = (
+        settings.min_score_by_source if request.min_score is None else {}
+    )
+    contexts = pipeline.build_context(
+        results,
+        min_score=request.min_score,
+        min_score_by_type=effective_min_score_by_type,
+        min_score_by_source=effective_min_score_by_source,
+        source_types=request.source_types,
+        source_names=request.source_names,
+        source_filter_mode=request.source_filter_mode,
+        limit=base_limit,
+    )
+    guardrail = require_context(contexts)
+    if not guardrail.allowed:
+        return ChatResponse(
+            answer=DEFAULT_REFUSAL,
+            sources=[],
+            refusal_reason=guardrail.reason,
+            route="chat",
+            request_id=request_id,
+            answerer="guardrail",
+            answerer_reason=guardrail.reason,
+        )
+    allowed, gate_reason = await _llm_context_gate(
+        last_user, contexts, request_id
+    )
+    if not allowed:
+        return ChatResponse(
+            answer=DEFAULT_REFUSAL,
+            sources=[],
+            refusal_reason=gate_reason or "insufficient_context",
+            route="chat",
+            request_id=request_id,
+            answerer="llm_gate",
+            answerer_reason=gate_reason or "insufficient_context",
+        )
+
+    is_db = contexts and all(
+        str(chunk.metadata.get("source_type", "")).lower() == "db"
+        for chunk in contexts
+    )
+    structured = _build_structured_payload(contexts, is_db, base_limit)
+    answer = ""
+    llm_refusal_reason = None
+    preferred_source_ids: list[str] | None = None
+    llm_used = False
+    fallback_used = False
+    role_prompt = _role_system_prompt(auth.role)
+    try:
+        llm = build_llm_answerer(
+            settings.llm_provider,
+            api_key_openai=settings.openai_api_key,
+            api_key_gemini=settings.gemini_api_key,
+            openai_base_url=settings.openai_base_url,
+            openai_model=settings.openai_chat_model,
+            gemini_model=settings.gemini_chat_model,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_model=settings.ollama_model,
+            temperature=settings.ollama_temperature,
+            max_tokens=settings.ollama_max_tokens,
+            timeout=settings.ollama_timeout,
+            context_max_chars=settings.llm_context_max_chars,
+            system_prompt=role_prompt,
+        )
+        llm_result = await llm.generate(last_user, contexts, history=history)
+        if llm_result.refusal_reason:
+            llm_refusal_reason = llm_result.refusal_reason
+        else:
+            answer = llm_result.answer
+            preferred_source_ids = llm_result.source_ids
+            llm_used = True
+    except LLMError as exc:
+        logger.error(
+            "llm_failed",
+            extra={
+                "request_id": request_id,
+                "detail": _safe_error_message(exc),
+            },
+        )
+    if not answer or answer == DEFAULT_REFUSAL:
+        fallback_mode = settings.llm_fallback_mode.strip().lower()
+        if is_db:
+            formatted = format_db_answer(contexts, max_items=base_limit)
+            if formatted:
+                answer = formatted
+                fallback_used = True
+        elif settings.answerer_mode.lower() == "llm" and fallback_mode == "summarize":
+            summarizer = SummarizingAnswerer()
+            answer = summarizer.generate(last_user, contexts)
+            fallback_used = True
+        elif settings.answerer_mode.lower() == "llm" and fallback_mode == "refuse":
+            answer = ""
+        else:
+            answer = ExtractiveAnswerer().generate(last_user, contexts)
+            fallback_used = True
+    if not answer:
+        return ChatResponse(
+            answer=DEFAULT_REFUSAL,
+            sources=[],
+            refusal_reason=llm_refusal_reason or "empty_answer",
+            route="chat",
+            request_id=request_id,
+            answerer="llm",
+            answerer_reason=llm_refusal_reason or "empty_answer",
+        )
+
+    ordered_contexts = order_contexts(contexts, preferred_source_ids)
+    sources = [
+        SourceChunk(
+            document_id=chunk.document_id,
+            content=chunk.content,
+            metadata=chunk.metadata,
+            score=chunk.score,
+            highlights=build_highlights(chunk.content, last_user),
+        )
+        for chunk in ordered_contexts
+    ]
+    answerer = "llm" if llm_used else "extractive"
+    if fallback_used and not llm_used:
+        answerer = "extractive"
+    answer, citations = _apply_citations(answer, ordered_contexts, None)
+    return ChatResponse(
+        answer=answer,
+        sources=sources,
+        refusal_reason=None,
+        route="chat",
+        request_id=request_id,
+        structured=structured,
+        citations=citations,
+        answerer=answerer,
+        answerer_reason=None if llm_used else (llm_refusal_reason or "fallback"),
+    )

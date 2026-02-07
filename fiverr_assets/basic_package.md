@@ -5,6 +5,7 @@ This package delivers a **production‑ready, document‑only RAG system** with 
 ## What’s Included
 - Document ingestion: `/ingest` and `/ingest/files`
 - Grounded Q&A: `/query`
+- Grounded chat endpoint: `/chat` (multi-turn with last-N history)
 - Source citations + structured JSON output
 - Streamlit demo UI
 - Milvus HNSW + BM25 hybrid search

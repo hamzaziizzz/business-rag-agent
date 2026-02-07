@@ -18,3 +18,4 @@ os.environ["RAG_ALLOW_ANONYMOUS"] = "true"
 os.environ.pop("OPENAI_API_KEY", None)
 os.environ.setdefault("RAG_VECTORSTORE", "memory")
 os.environ.setdefault("RAG_HYBRID_SEARCH", "false")
+os.environ.setdefault("RAG_DISABLE_TIKTOKEN", "true")

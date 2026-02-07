@@ -49,6 +49,36 @@ class QueryResponse(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
 
 
+class ChatMessage(BaseModel):
+    """Single chat message in a conversation."""
+    role: Literal["user", "assistant", "system"]
+    content: str = Field(min_length=1)
+
+
+class ChatRequest(BaseModel):
+    """Request payload for chat endpoint."""
+    messages: list[ChatMessage]
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_types: list[str] | None = None
+    source_names: list[str] | None = None
+    source_filter_mode: Literal["and", "or"] = "and"
+    trace_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    """Response payload for chat endpoint."""
+    answer: str
+    sources: list[SourceChunk]
+    refusal_reason: str | None = None
+    route: str
+    request_id: str
+    answerer: str | None = None
+    answerer_reason: str | None = None
+    structured: dict[str, Any] | None = None
+    citations: list[Citation] = Field(default_factory=list)
+
+
 class IngestDocument(BaseModel):
     """Single document payload for ingest."""
     doc_id: str | None = None
