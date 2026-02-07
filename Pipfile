@@ -25,6 +25,7 @@ streamlit = "*"
 tiktoken = "*"
 pymupdf = "*"
 sqlalchemy = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 ruff = "*"
