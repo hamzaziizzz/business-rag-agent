@@ -12,12 +12,9 @@ from src.rag.embeddings import (
     GeminiEmbedder,
     HashEmbedder,
     OpenAIEmbedder,
-    build_embedding_config_report,
-    EmbeddingConfigReport,
 )
 from src.rag.rewriter import QueryRewriter, build_rewriter
 from src.rag.pipeline import RAGPipeline
-from src.metadata.store import MetadataStore
 from src.metadata.audit import AuditStore
 from src.vectorstore.inmemory import InMemoryVectorStore
 from src.vectorstore.milvus import MilvusConfig, MilvusVectorStore
@@ -47,32 +44,11 @@ def reset_pipeline_cache() -> None:
 
 
 @lru_cache
-def get_metadata_store() -> MetadataStore | None:
-    """Return the metadata store if configured."""
-    if not settings.metadata_db_uri:
-        return None
-    return MetadataStore(settings.metadata_db_uri)
-
-
-@lru_cache
 def get_audit_store() -> AuditStore | None:
     """Return the audit store if configured."""
     if settings.audit_db_uri:
         return AuditStore(settings.audit_db_uri)
-    if settings.metadata_db_uri:
-        return AuditStore(settings.metadata_db_uri)
     return None
-
-
-def get_embedding_config_report() -> EmbeddingConfigReport:
-    """Return a report describing embedding configuration health."""
-    provider = settings.embedding_provider
-    model = None
-    if provider.lower().strip() == "openai":
-        model = settings.openai_embedding_model
-    elif provider.lower().strip() in {"gemini", "google"}:
-        model = settings.gemini_embedding_model
-    return build_embedding_config_report(provider, model, settings.embedding_dimension)
 
 
 @lru_cache

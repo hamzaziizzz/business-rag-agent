@@ -20,11 +20,8 @@ def _headers(api_key: str | None) -> dict[str, str]:
     return {"X-API-Key": api_key.strip()}
 
 
-def _merge_headers(api_key: str | None, demo_role: str | None) -> dict[str, str]:
-    headers = _headers(api_key)
-    if demo_role:
-        headers["X-Demo-Role"] = demo_role
-    return headers
+def _merge_headers(api_key: str | None) -> dict[str, str]:
+    return _headers(api_key)
 
 
 def _post_json(
@@ -33,12 +30,11 @@ def _post_json(
     payload: dict[str, Any],
     api_key: str | None,
     timeout: float | None,
-    demo_role: str | None,
 ):
     """POST JSON payloads to the API."""
     url = api_url.rstrip("/") + path
     with httpx.Client(timeout=timeout) as client:
-        return client.post(url, json=payload, headers=_merge_headers(api_key, demo_role))
+        return client.post(url, json=payload, headers=_merge_headers(api_key))
 
 
 def _post_files(
@@ -47,20 +43,19 @@ def _post_files(
     files,
     api_key: str | None,
     timeout: float | None,
-    demo_role: str | None,
 ):
     """POST multipart file uploads to the API."""
     url = api_url.rstrip("/") + path
     with httpx.Client(timeout=timeout) as client:
-        return client.post(url, files=files, headers=_merge_headers(api_key, demo_role))
+        return client.post(url, files=files, headers=_merge_headers(api_key))
 
 
-def _health_check(api_url: str, api_key: str | None, demo_role: str | None) -> tuple[bool, str]:
+def _health_check(api_url: str, api_key: str | None) -> tuple[bool, str]:
     """Return backend health status and a human-readable message."""
     url = api_url.rstrip("/") + "/health"
     try:
         with httpx.Client(timeout=5.0) as client:
-            response = client.get(url, headers=_merge_headers(api_key, demo_role))
+            response = client.get(url, headers=_merge_headers(api_key))
         if response.status_code == 200:
             return True, "API is reachable."
         return False, f"API responded with status {response.status_code}."
@@ -113,7 +108,6 @@ with st.sidebar:
     st.header("Connection")
     api_url = st.text_input("API base URL", value=DEFAULT_API_URL)
     api_key = st.text_input("API key (optional)", type="password")
-    demo_role = st.selectbox("Demo role (optional)", ["", "admin", "writer", "reader"], index=0)
     request_timeout = st.number_input(
         "Request timeout (seconds, 0 = no timeout)",
         min_value=0,
@@ -122,7 +116,7 @@ with st.sidebar:
         step=5,
     )
     if st.button("Health Check"):
-        ok, message = _health_check(api_url, api_key, demo_role)
+        ok, message = _health_check(api_url, api_key)
         if ok:
             st.success(message)
         else:
@@ -156,7 +150,7 @@ with tab_chat:
             "top_k": 4,
         }
         try:
-            response = _post_json(api_url, "/chat", payload, api_key, timeout, demo_role)
+            response = _post_json(api_url, "/chat", payload, api_key, timeout)
             result = response.json()
             answer = result.get("answer", "")
             st.session_state.chat_messages.append({"role": "assistant", "content": answer})
@@ -185,7 +179,7 @@ with tab_query:
             if route != "auto":
                 payload["route"] = route
             timeout = None if request_timeout == 0 else float(request_timeout)
-            response = _post_json(api_url, "/query", payload, api_key, timeout, demo_role)
+            response = _post_json(api_url, "/query", payload, api_key, timeout)
             _render_response(response)
         except httpx.HTTPError as exc:
             st.error(f"API connection failed: {exc}")
@@ -207,7 +201,7 @@ with tab_ingest:
                 ]
             }
             timeout = None if request_timeout == 0 else float(request_timeout)
-            response = _post_json(api_url, "/ingest", payload, api_key, timeout, demo_role)
+            response = _post_json(api_url, "/ingest", payload, api_key, timeout)
             _render_response(response)
         except httpx.HTTPError as exc:
             st.error(f"API connection failed: {exc}")
@@ -225,7 +219,7 @@ with tab_upload:
                 for file in uploaded_files
             ]
             timeout = None if request_timeout == 0 else float(request_timeout)
-            response = _post_files(api_url, "/ingest/files", files, api_key, timeout, demo_role)
+            response = _post_files(api_url, "/ingest/files", files, api_key, timeout)
             _render_response(response)
         except httpx.HTTPError as exc:
             st.error(f"API connection failed: {exc}")

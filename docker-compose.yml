@@ -6,7 +6,6 @@ services:
       RAG_VECTORSTORE: milvus
       MILVUS_URI: http://milvus:19530
       OLLAMA_BASE_URL: http://ollama:11434
-      RAG_METADATA_DB_URI: postgresql://rag:rag@postgres:5432/rag_metadata
       RAG_AUDIT_DB_URI: postgresql://rag:rag@postgres:5432/rag_metadata
     ports:
       - "8000:8000"
@@ -122,15 +121,6 @@ services:
       done;
       ollama list | grep -q \"$${OLLAMA_MODEL}\" || ollama pull \"$${OLLAMA_MODEL}\"
       "
-
-  attu:
-    image: zilliz/attu:v2.2.8
-    environment:
-      MILVUS_URL: milvus:19530
-    ports:
-      - "8010:3000"
-    depends_on:
-      - milvus
 
   postgres:
     image: postgres:15-alpine

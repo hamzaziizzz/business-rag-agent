@@ -3,26 +3,15 @@ from __future__ import annotations
 """FastAPI application entrypoint for the document-only RAG service."""
 
 import hashlib
-import json
 import logging
 import uuid
-from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
 
-from src.app.dependencies import (
-    get_audit_store,
-    get_embedding_config_report,
-    get_metadata_store,
-    get_pipeline,
-    get_query_rewriter,
-)
+from src.app.dependencies import get_audit_store, get_pipeline, get_query_rewriter
 from src.app.settings import settings
 from src.app.schemas import (
-    DeleteSourceRequest,
-    DeleteSourceResponse,
     IngestRequest,
     IngestResponse,
     ChatRequest,
@@ -31,12 +20,8 @@ from src.app.schemas import (
     QueryRequest,
     QueryResponse,
     SourceChunk,
-    StatsResponse,
-    StatsHealthResponse,
-    EmbeddingHealthResponse,
 )
-from src.app.security import AuthContext, require_api_key, require_roles, resolve_tenant_id
-from src.app.metrics import metrics_middleware, metrics_response
+from src.app.security import AuthContext, require_api_key
 from src.loaders.chunking import chunk_document, normalize_query_tokens
 from src.loaders.markdown import load_markdown_bytes
 from src.loaders.docx import DocxLoaderError, load_docx_bytes
@@ -45,7 +30,6 @@ from src.loaders.text import load_text_bytes
 from src.loaders.xlsx import XlsxLoaderError, load_xlsx_bytes
 from src.loaders.csv_loader import CSVLoaderError, load_csv_bytes
 from src.rag.answerer import ExtractiveAnswerer, SummarizingAnswerer
-from src.rag.embeddings import EmbeddingConfigError
 from src.rag.formatters import build_json_summary, extract_db_records, format_db_answer
 from src.rag.guardrails import DEFAULT_REFUSAL, require_context
 from src.rag.highlights import build_highlights
@@ -54,7 +38,6 @@ from src.rag.citations import append_citation_footer, build_citations, order_con
 from src.rag.rewriter import QueryRewriteError
 from src.rag.types import ContextChunk, Document
 from src.agents.router import AgentRouter
-from src.metadata.store import IngestionMeta, MetadataStore
 from src.metadata.audit import AuditEvent, hash_actor
 
 logger = logging.getLogger(__name__)
@@ -62,7 +45,6 @@ router = AgentRouter()
 
 app = FastAPI(title="Business RAG Agent", version="0.1.0")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEMO_UI_PATH = PROJECT_ROOT / "fiverr_assets" / "simple_chat_ui.html"
 
 
 def _configure_logging() -> None:
@@ -79,14 +61,6 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
-
-
-def _sanitize_url(url: str) -> str:
-    """Remove query fragments from URLs before storing in metadata."""
-    parsed = urlparse(url)
-    if not parsed.scheme:
-        return url
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
 def _record_audit_event(event: AuditEvent) -> None:
@@ -267,56 +241,10 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
-@app.middleware("http")
-async def record_metrics(request: Request, call_next):
-    """Capture request metrics before returning the response."""
-    return await metrics_middleware(request, call_next)
-
-
-@app.get("/metrics")
-async def metrics():
-    """Expose Prometheus-style metrics."""
-    return metrics_response()
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Simple health probe for uptime checks."""
     return {"status": "ok"}
-
-
-@app.get("/demo", response_class=HTMLResponse)
-async def demo() -> HTMLResponse:
-    """Serve the static HTML demo UI."""
-    if not DEMO_UI_PATH.exists():
-        raise HTTPException(status_code=404, detail="Demo UI not found")
-    return HTMLResponse(DEMO_UI_PATH.read_text(encoding="utf-8"))
-
-
-@app.get("/stats", response_model=StatsResponse)
-async def stats(auth: AuthContext = Depends(require_api_key)) -> StatsResponse:
-    """Return vector store stats for admins."""
-    require_roles(auth, {"admin"})
-    pipeline = get_pipeline()
-    return StatsResponse(**pipeline.vectorstore.stats())
-
-
-@app.get("/stats/health", response_model=StatsHealthResponse)
-async def stats_health(auth: AuthContext = Depends(require_api_key)) -> StatsHealthResponse:
-    """Return vector store health status for admins."""
-    require_roles(auth, {"admin"})
-    pipeline = get_pipeline()
-    return StatsHealthResponse(**pipeline.vectorstore.health())
-
-
-@app.get("/stats/embedding", response_model=EmbeddingHealthResponse)
-async def embedding_health(
-    auth: AuthContext = Depends(require_api_key),
-) -> EmbeddingHealthResponse:
-    """Return embedding configuration health checks."""
-    require_roles(auth, {"admin"})
-    report = get_embedding_config_report()
-    return EmbeddingHealthResponse(**report.__dict__)
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -326,27 +254,14 @@ async def ingest(
     auth: AuthContext = Depends(require_api_key),
 ) -> IngestResponse:
     """Ingest raw text documents into the vector store."""
-    require_roles(auth, {"writer", "admin"})
     pipeline = get_pipeline()
-    store = get_metadata_store()
-    tenant_id = resolve_tenant_id(http_request, auth)
+    tenant_id = settings.default_tenant_id
     request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    record_id = None
-    if store:
-        meta = IngestionMeta(
-            source_type="manual",
-            source_name=f"{tenant_id}:manual",
-            source_uri="manual",
-            status="started",
-            extra={"doc_count": len(request.documents)},
-        )
-        record_id = store.record_start(meta)
     documents: list[Document] = []
     for idx, doc in enumerate(request.documents, start=1):
         metadata = dict(doc.metadata)
         metadata.setdefault("source_type", "manual")
         metadata.setdefault("source_name", "manual")
-        metadata.setdefault("tenant_id", tenant_id)
         document = Document(
             doc_id=doc.doc_id or f"doc-{idx}",
             content=doc.content,
@@ -374,8 +289,6 @@ async def ingest(
                 detail={"source_type": "manual", "source_name": "manual", "reason": "empty"},
             )
         )
-        if store and record_id:
-            store.record_failure(record_id, "No documents provided")
         raise HTTPException(status_code=400, detail="No documents provided")
     ingested = pipeline.ingest(documents)
     _record_audit_event(
@@ -394,61 +307,9 @@ async def ingest(
             },
         )
     )
-    if store and record_id:
-        store.record_complete(record_id, ingested=ingested, chunk_count=len(documents))
     return IngestResponse(ingested=ingested)
 
 
-
-
-@app.post("/ingest/delete", response_model=DeleteSourceResponse)
-async def delete_sources(
-    request: DeleteSourceRequest,
-    http_request: Request,
-    auth: AuthContext = Depends(require_api_key),
-) -> DeleteSourceResponse:
-    """Delete ingested documents using source filters."""
-    require_roles(auth, {"admin"})
-    if not (request.source_types or request.source_names):
-        raise HTTPException(status_code=400, detail="source_types or source_names required")
-    pipeline = get_pipeline()
-    tenant_id = resolve_tenant_id(http_request, auth)
-    try:
-        deleted = pipeline.delete_by_source(
-            source_types=request.source_types,
-            source_names=request.source_names,
-            tenant_id=tenant_id,
-            source_filter_mode=request.source_filter_mode,
-        )
-    except EmbeddingConfigError as exc:
-        _record_audit_event(
-            AuditEvent(
-                event_type="delete",
-                request_id=getattr(http_request.state, "request_id", str(uuid.uuid4())),
-                tenant_id=tenant_id,
-                actor=hash_actor(auth.api_key),
-                status="failed",
-                route=None,
-                detail={"error": _safe_error_message(exc)},
-            )
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _record_audit_event(
-        AuditEvent(
-            event_type="delete",
-            request_id=getattr(http_request.state, "request_id", str(uuid.uuid4())),
-            tenant_id=tenant_id,
-            actor=hash_actor(auth.api_key),
-            status="completed",
-            route=None,
-            detail={
-                "source_types": request.source_types or [],
-                "source_names": request.source_names or [],
-                "deleted": deleted,
-            },
-        )
-    )
-    return DeleteSourceResponse(deleted=deleted)
 
 
 @app.post("/ingest/files", response_model=IngestResponse)
@@ -458,23 +319,11 @@ async def ingest_files(
     auth: AuthContext = Depends(require_api_key),
 ) -> IngestResponse:
     """Ingest uploaded files into the vector store."""
-    require_roles(auth, {"writer", "admin"})
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
     pipeline = get_pipeline()
-    store = get_metadata_store()
-    tenant_id = resolve_tenant_id(http_request, auth)
+    tenant_id = settings.default_tenant_id
     request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    record_id = None
-    if store:
-        meta = IngestionMeta(
-            source_type="file",
-            source_name=f"{tenant_id}:upload",
-            source_uri="upload",
-            status="started",
-            extra={"file_count": len(files)},
-        )
-        record_id = store.record_start(meta)
     documents: list[Document] = []
     for idx, upload in enumerate(files, start=1):
         filename = upload.filename or f"upload-{idx}"
@@ -498,8 +347,6 @@ async def ingest_files(
                     },
                 )
             )
-            if store and record_id:
-                store.record_failure(record_id, detail)
             logger.error(
                 "file_ingest_failed",
                 extra={
@@ -558,7 +405,6 @@ async def ingest_files(
             )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        document.metadata.setdefault("tenant_id", tenant_id)
         documents.extend(
             chunk_document(
                 document,
@@ -582,8 +428,6 @@ async def ingest_files(
                 detail={"source_type": "file", "source_name": "upload", "reason": "empty"},
             )
         )
-        if store and record_id:
-            store.record_failure(record_id, "No valid file content provided")
         raise HTTPException(status_code=400, detail="No valid file content provided")
     ingested = pipeline.ingest(documents)
     _record_audit_event(
@@ -602,8 +446,6 @@ async def ingest_files(
             },
         )
     )
-    if store and record_id:
-        store.record_complete(record_id, ingested=ingested, chunk_count=len(documents))
     return IngestResponse(ingested=ingested)
 
 
@@ -614,9 +456,9 @@ async def query(
     auth: AuthContext = Depends(require_api_key),
 ) -> QueryResponse:
     """Route and answer a query using the RAG pipeline."""
-    require_roles(auth, {"reader", "writer", "admin"})
     request_id = request.trace_id or getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    tenant_id = resolve_tenant_id(http_request, auth)
+    tenant_id = settings.default_tenant_id
+    retrieval_tenant_id = None
     query_hash = hashlib.sha256(request.query.encode("utf-8")).hexdigest()
     if request.route:
         decision_tool = request.route
@@ -711,7 +553,7 @@ async def query(
             top_k=retrieval_limit,
             source_types=request.source_types,
             source_names=request.source_names,
-            tenant_id=tenant_id,
+            tenant_id=retrieval_tenant_id,
             source_filter_mode=request.source_filter_mode,
         )
         _log_top_scores(request_id, results)
@@ -923,7 +765,7 @@ async def query(
             top_k=retrieval_limit,
             source_types=request.source_types,
             source_names=request.source_names,
-            tenant_id=tenant_id,
+            tenant_id=retrieval_tenant_id,
             source_filter_mode=request.source_filter_mode,
         )
         _log_top_scores(request_id, results)
@@ -1139,7 +981,7 @@ async def query(
         min_score_by_source=effective_min_score_by_source,
         source_types=request.source_types,
         source_names=request.source_names,
-        tenant_id=tenant_id,
+        tenant_id=retrieval_tenant_id,
         source_filter_mode=request.source_filter_mode,
         retrieval_query=retrieval_query,
     )
@@ -1218,9 +1060,9 @@ async def chat(
     auth: AuthContext = Depends(require_api_key),
 ) -> ChatResponse:
     """Chat endpoint for multi-turn RAG conversations."""
-    require_roles(auth, {"reader", "writer", "admin"})
     request_id = request.trace_id or getattr(http_request.state, "request_id", str(uuid.uuid4()))
-    tenant_id = resolve_tenant_id(http_request, auth)
+    tenant_id = settings.default_tenant_id
+    retrieval_tenant_id = None
     messages = request.messages or []
     if not messages:
         return ChatResponse(
@@ -1278,7 +1120,7 @@ async def chat(
         top_k=retrieval_limit,
         source_types=request.source_types,
         source_names=request.source_names,
-        tenant_id=tenant_id,
+        tenant_id=retrieval_tenant_id,
         source_filter_mode=request.source_filter_mode,
     )
     _log_top_scores(request_id, results)

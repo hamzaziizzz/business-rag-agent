@@ -15,12 +15,14 @@ This project delivers a **Custom AI Agent powered by Retrieval-Augmented Generat
 
 ---
 
-## 2. Core Capabilities (Basic Package)
+## 2. Core Capabilities (Premium Package)
 
 * Document ingestion (PDF/CSV/Markdown/Text)
 * Grounded Q&A (answers only from retrieved context)
 * Multi-turn grounded chat (strict RAG)
 * Source citations and structured JSON output
+* Role-based prompts and LLM context gating
+* Audit trail for ingest/query operations
 * Streamlit demo UI
 * Milvus HNSW + BM25 hybrid search
 
@@ -48,21 +50,20 @@ Final Answer + Sources
 
 ---
 
-## 4. Technology Stack (Basic Package)
+## 4. Technology Stack (Premium Package)
 
 * FastAPI backend
 * Milvus vector database (HNSW + BM25 hybrid)
 * LLM providers: Ollama / OpenAI / Gemini (pluggable)
 * Streamlit demo UI
+* Postgres-backed audit logging
 
 ---
 
 ## 5. Quick Start
 
-Follow the Basic Package guide:
+Follow the API documentation:
 
-* `fiverr_assets/basic_package.md`
-* `docs/standard_package.md` (Standard package checklist)
 * `docs/api.md` (Premium API docs)
 
 ---
