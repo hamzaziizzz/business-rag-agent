@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Settings loader for environment-driven configuration."""
 
-import json
 import os
 import sys
 from dataclasses import dataclass
@@ -57,11 +56,8 @@ class Settings:
     chunk_tokens: int = int(os.getenv("RAG_CHUNK_TOKENS", "0"))
     chunk_token_overlap: int = int(os.getenv("RAG_CHUNK_TOKEN_OVERLAP", "0"))
     tokenizer_encoding: str = os.getenv("RAG_TOKENIZER_ENCODING", "cl100k_base")
-    metrics_enabled: bool = os.getenv("RAG_METRICS_ENABLED", "true").lower() in {"1", "true", "yes"}
     file_max_bytes: int = int(os.getenv("RAG_FILE_MAX_BYTES", "10485760"))
     api_keys_raw: str = os.getenv("RAG_API_KEYS", "")
-    api_key_map_raw: str = os.getenv("RAG_API_KEY_MAP", "")
-    default_tenant_id: str = os.getenv("RAG_DEFAULT_TENANT_ID", "default")
     allow_anonymous: bool = os.getenv("RAG_ALLOW_ANONYMOUS", "false").lower() in {
         "1",
         "true",
@@ -101,8 +97,6 @@ class Settings:
     router_timeout: float = float(os.getenv("RAG_ROUTER_TIMEOUT", "10"))
     router_max_tokens: int = int(os.getenv("RAG_ROUTER_MAX_TOKENS", "64"))
     log_level: str = os.getenv("RAG_LOG_LEVEL", "INFO")
-    metadata_db_uri: str | None = os.getenv("RAG_METADATA_DB_URI")
-    audit_db_uri: str | None = os.getenv("RAG_AUDIT_DB_URI")
     chat_history_turns: int = int(os.getenv("RAG_CHAT_HISTORY_TURNS", "6"))
 
 
@@ -112,31 +106,6 @@ class Settings:
         raw = os.getenv("RAG_API_KEYS", self.api_keys_raw)
         return {value.strip() for value in raw.split(",") if value.strip()}
 
-    @property
-    def api_key_map(self) -> dict[str, dict[str, str]]:
-        """Return API key to role/tenant mappings parsed from JSON."""
-        raw = os.getenv("RAG_API_KEY_MAP", self.api_key_map_raw).strip()
-        if not raw:
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        result: dict[str, dict[str, str]] = {}
-        for key, value in data.items():
-            if not isinstance(key, str) or not isinstance(value, dict):
-                continue
-            role = value.get("role")
-            tenant_id = value.get("tenant_id")
-            if isinstance(role, str) and isinstance(tenant_id, str):
-                result[key] = {"role": role, "tenant_id": tenant_id}
-            elif isinstance(role, str):
-                result[key] = {"role": role, "tenant_id": self.default_tenant_id}
-            elif isinstance(tenant_id, str):
-                result[key] = {"role": "reader", "tenant_id": tenant_id}
-        return result
 
     @property
     def answerer_mode(self) -> str:

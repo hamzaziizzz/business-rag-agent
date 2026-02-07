@@ -12,11 +12,7 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    source_types: list[str] | None = None
-    source_names: list[str] | None = None
-    source_filter_mode: Literal["and", "or"] = "and"
     route: Literal["rag", "summarize"] | None = None
-    trace_id: str | None = None
 
 
 class SourceChunk(BaseModel):
@@ -58,10 +54,6 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     top_k: int | None = Field(default=None, ge=1, le=20)
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    source_types: list[str] | None = None
-    source_names: list[str] | None = None
-    source_filter_mode: Literal["and", "or"] = "and"
-    trace_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -90,44 +82,3 @@ class IngestRequest(BaseModel):
 class IngestResponse(BaseModel):
     """Response payload for ingest requests."""
     ingested: int
-
-
-class StatsResponse(BaseModel):
-    """Vector store stats response."""
-    backend: str
-    document_count: int
-    embedding_dimension: int
-    collection: str | None = None
-
-
-class StatsHealthResponse(BaseModel):
-    """Vector store health response."""
-    backend: str
-    ok: bool
-    detail: str | None = None
-    collection: str | None = None
-
-
-class EmbeddingHealthResponse(BaseModel):
-    """Embedding configuration health response."""
-    provider: str
-    model: str | None
-    configured_dimension: int
-    expected_dimension: int | None = None
-    ok: bool
-    status: str
-    detail: str | None = None
-    action: str | None = None
-
-
-
-class DeleteSourceRequest(BaseModel):
-    """Request payload for source deletion."""
-    source_types: list[str] | None = None
-    source_names: list[str] | None = None
-    source_filter_mode: Literal["and", "or"] = "and"
-
-
-class DeleteSourceResponse(BaseModel):
-    """Response payload for source deletion."""
-    deleted: int

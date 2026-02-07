@@ -12,7 +12,6 @@ os.environ["EMBEDDING_PROVIDER"] = "hash"
 os.environ["EMBEDDING_DIMENSION"] = "256"
 os.environ["RAG_CHUNK_SIZE"] = "1000"
 os.environ["RAG_CHUNK_OVERLAP"] = "100"
-os.environ["RAG_DB_MAX_ROWS"] = "100"
 os.environ["RAG_API_TIMEOUT"] = "5"
 os.environ["RAG_API_MAX_BYTES"] = "10240"
 
@@ -96,58 +95,6 @@ async def test_ingest_files_text() -> None:
     payload = query_response.json()
     assert "Travel policy" in payload["answer"]
     assert payload["sources"][0]["highlights"]
-
-
-async def test_stats_endpoint() -> None:
-    """Ensure stats endpoint returns stats."""
-    async with get_client() as client:
-        response = await client.get("/stats")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_count"] == 0
-
-        ingest_response = await client.post(
-            "/ingest",
-            json={
-                "documents": [
-                    {"doc_id": "policy", "content": "Travel policy details.", "metadata": {}}
-                ]
-            },
-        )
-        assert ingest_response.status_code == 200
-
-        response = await client.get("/stats")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_count"] >= 1
-
-
-async def test_stats_health_endpoint() -> None:
-    """Ensure stats health endpoint returns health."""
-    async with get_client() as client:
-        response = await client.get("/stats/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["backend"] == "memory"
-        assert data["ok"] is True
-
-
-async def test_embedding_health_endpoint() -> None:
-    """Ensure embedding health endpoint returns report."""
-    async with get_client() as client:
-        response = await client.get("/stats/embedding")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["provider"] == "hash"
-        assert data["ok"] is True
-
-
-async def test_demo_ui_endpoint() -> None:
-    """Ensure demo UI endpoint returns HTML."""
-    async with get_client() as client:
-        response = await client.get("/demo")
-    assert response.status_code == 200
-    assert "Grounded Business RAG Assistant" in response.text
 
 
 async def test_query_routing_summarize() -> None:

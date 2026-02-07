@@ -13,8 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
 os.environ.setdefault("RAG_ALLOW_ANONYMOUS", "true")
 os.environ["RAG_ANSWERER"] = "extractive"
 os.environ.pop("RAG_API_KEYS", None)
-os.environ.pop("RAG_API_KEY_MAP", None)
-os.environ["RAG_ALLOW_ANONYMOUS"] = "true"
 os.environ.pop("OPENAI_API_KEY", None)
 os.environ.setdefault("RAG_VECTORSTORE", "memory")
 os.environ.setdefault("RAG_HYBRID_SEARCH", "false")

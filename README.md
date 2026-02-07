@@ -15,14 +15,13 @@ This project delivers a **Custom AI Agent powered by Retrieval-Augmented Generat
 
 ---
 
-## 2. Core Capabilities (Basic Package)
+## 2. Core Capabilities (Standard Package)
 
 * Document ingestion (PDF/CSV/Markdown/Text)
 * Grounded Q&A (answers only from retrieved context)
 * Multi-turn grounded chat (strict RAG)
 * Source citations and structured JSON output
 * Streamlit demo UI
-* Milvus HNSW + BM25 hybrid search
 
 This branch is **document-only**. All DB/API/object/SQL ingestion paths are removed to keep the system focused and reliable for document RAG.
 
@@ -48,10 +47,10 @@ Final Answer + Sources
 
 ---
 
-## 4. Technology Stack (Basic Package)
+## 4. Technology Stack (Standard Package)
 
 * FastAPI backend
-* Milvus vector database (HNSW + BM25 hybrid)
+* Milvus vector database
 * LLM providers: Ollama / OpenAI / Gemini (pluggable)
 * Streamlit demo UI
 
@@ -59,16 +58,15 @@ Final Answer + Sources
 
 ## 5. Quick Start
 
-Follow the Basic Package guide:
+Follow the Standard Package guide:
 
-* `fiverr_assets/basic_package.md`
-* `docs/standard_package.md` (Standard package checklist)
+* `docs/standard_package.md`
 
 ---
 
 ## 6. Milvus Reset (Document-Only)
 
-If you change schema (e.g., enable HNSW + BM25 hybrid), drop and recreate the collection and re-ingest documents.
+If you change schema, drop and recreate the collection and re-ingest documents.
 
 ```
 /home/hamza/.local/share/virtualenvs/business-rag-agent-C7T_qDqk/bin/python3 \

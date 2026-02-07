@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Authentication and tenant resolution helpers."""
+"""Authentication helpers."""
 
-import os
 from dataclasses import dataclass
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, Security, status
+from fastapi.security import APIKeyHeader
 
 from src.app.settings import settings
 
@@ -14,19 +14,21 @@ from src.app.settings import settings
 class AuthContext:
     """Resolved authentication context for the current request."""
     api_key: str | None
-    role: str
-    tenant_id: str
 
 
-async def require_api_key(request: Request) -> AuthContext:
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def require_api_key(
+    request: Request,
+    api_key_header: str | None = Security(_api_key_header),
+) -> AuthContext:
     """Validate API key or allow anonymous access if configured."""
-    api_key = _extract_api_key(request)
-    key_map = settings.api_key_map
+    api_key = api_key_header or _extract_api_key(request)
     allowed = settings.api_keys
-    allow_anonymous = os.getenv("RAG_ALLOW_ANONYMOUS", "false").lower() in {"1", "true", "yes"}
-    if not (key_map or allowed):
-        if allow_anonymous:
-            return AuthContext(api_key=None, role="admin", tenant_id=settings.default_tenant_id)
+    if not allowed:
+        if settings.allow_anonymous:
+            return AuthContext(api_key=None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key required",
@@ -38,43 +40,13 @@ async def require_api_key(request: Request) -> AuthContext:
             detail="Invalid or missing API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if key_map:
-        entry = key_map.get(api_key)
-        if not entry:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or missing API key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        role = entry.get("role", "reader").lower()
-        tenant_id = entry.get("tenant_id", settings.default_tenant_id)
-        return AuthContext(api_key=api_key, role=role, tenant_id=tenant_id)
     if api_key not in allowed:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return AuthContext(api_key=api_key, role="admin", tenant_id=settings.default_tenant_id)
-
-
-def require_roles(auth: AuthContext, allowed: set[str]) -> None:
-    """Enforce role-based access control."""
-    if auth.role not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions",
-        )
-
-
-def resolve_tenant_id(request: Request, auth: AuthContext) -> str:
-    """Resolve tenant ID, allowing admin override via header."""
-    if auth.tenant_id == "*":
-        return "*"
-    header = request.headers.get("x-tenant-id")
-    if header and auth.role == "admin":
-        return header.strip()
-    return auth.tenant_id
+    return AuthContext(api_key=api_key)
 
 
 def _extract_api_key(request: Request) -> str | None:
