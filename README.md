@@ -19,9 +19,7 @@ This project delivers a **Custom AI Agent powered by Retrieval-Augmented Generat
 
 * Document ingestion (PDF/CSV/Markdown/Text)
 * Grounded Q&A (answers only from retrieved context)
-* Source citations and structured JSON output
-* Streamlit demo UI
-* Milvus HNSW + BM25 hybrid search
+* Source citations
 
 This branch is **document-only**. All DB/API/object/SQL ingestion paths are removed to keep the system focused and reliable for document RAG.
 
@@ -50,17 +48,23 @@ Final Answer + Sources
 ## 4. Technology Stack (Basic Package)
 
 * FastAPI backend
-* Milvus vector database (HNSW + BM25 hybrid)
-* LLM providers: Ollama / OpenAI / Gemini (pluggable)
-* Streamlit demo UI
+* Milvus vector database
+* Embeddings via OpenAI or Gemini (pluggable)
 
 ---
 
 ## 5. Quick Start
 
-Follow the Basic Package guide:
-
-* `fiverr_assets/basic_package.md`
+1. Copy `.env.basic` → `.env` and fill in values.
+2. Start Milvus services:
+   ```bash
+   docker compose up -d milvus etcd minio
+   ```
+3. Run the API:
+   ```bash
+   /home/hamza/.local/share/virtualenvs/business-rag-agent-C7T_qDqk/bin/python3 \
+     -m uvicorn src.app.main:app --host 0.0.0.0 --port 8010
+   ```
 
 ---
 

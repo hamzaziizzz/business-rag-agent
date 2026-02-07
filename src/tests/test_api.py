@@ -12,7 +12,6 @@ os.environ["EMBEDDING_PROVIDER"] = "hash"
 os.environ["EMBEDDING_DIMENSION"] = "256"
 os.environ["RAG_CHUNK_SIZE"] = "1000"
 os.environ["RAG_CHUNK_OVERLAP"] = "100"
-os.environ["RAG_DB_MAX_ROWS"] = "100"
 os.environ["RAG_API_TIMEOUT"] = "5"
 os.environ["RAG_API_MAX_BYTES"] = "10240"
 
@@ -61,9 +60,8 @@ async def test_ingest_and_query() -> None:
     assert query_response.status_code == 200
     payload = query_response.json()
     assert "Q4 sales were 100 units" in payload["answer"]
-    assert payload["route"] == "rag"
     assert payload["request_id"]
-    assert payload["sources"][0]["highlights"]
+    assert payload["sources"]
 
 
 async def test_query_refuses_without_context() -> None:
@@ -73,7 +71,6 @@ async def test_query_refuses_without_context() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["answer"].startswith("I don't know")
-    assert payload["route"] == "rag"
     assert payload["request_id"]
 
 
@@ -95,82 +92,3 @@ async def test_ingest_files_text() -> None:
     assert query_response.status_code == 200
     payload = query_response.json()
     assert "Travel policy" in payload["answer"]
-    assert payload["sources"][0]["highlights"]
-
-
-async def test_stats_endpoint() -> None:
-    """Ensure stats endpoint returns stats."""
-    async with get_client() as client:
-        response = await client.get("/stats")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_count"] == 0
-
-        ingest_response = await client.post(
-            "/ingest",
-            json={
-                "documents": [
-                    {"doc_id": "policy", "content": "Travel policy details.", "metadata": {}}
-                ]
-            },
-        )
-        assert ingest_response.status_code == 200
-
-        response = await client.get("/stats")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_count"] >= 1
-
-
-async def test_stats_health_endpoint() -> None:
-    """Ensure stats health endpoint returns health."""
-    async with get_client() as client:
-        response = await client.get("/stats/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["backend"] == "memory"
-        assert data["ok"] is True
-
-
-async def test_embedding_health_endpoint() -> None:
-    """Ensure embedding health endpoint returns report."""
-    async with get_client() as client:
-        response = await client.get("/stats/embedding")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["provider"] == "hash"
-        assert data["ok"] is True
-
-
-async def test_demo_ui_endpoint() -> None:
-    """Ensure demo UI endpoint returns HTML."""
-    async with get_client() as client:
-        response = await client.get("/demo")
-    assert response.status_code == 200
-    assert "Grounded Business RAG Assistant" in response.text
-
-
-async def test_query_routing_summarize() -> None:
-    """Ensure router selects summarize route when prompted."""
-    async with get_client() as client:
-        ingest_response = await client.post(
-            "/ingest",
-            json={
-                "documents": [
-                    {
-                        "doc_id": "summary",
-                        "content": "The policy covers travel bookings and approvals.",
-                        "metadata": {"source": "policy"},
-                    }
-                ]
-            },
-        )
-        assert ingest_response.status_code == 200
-        response = await client.post(
-            "/query",
-            json={"query": "Summarize the travel policy."},
-        )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["route"] == "summarize"
-    assert payload["answer"].startswith("Summary based on the provided context")

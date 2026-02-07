@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Pydantic request/response schemas for the API."""
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -12,11 +12,6 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    source_types: list[str] | None = None
-    source_names: list[str] | None = None
-    source_filter_mode: Literal["and", "or"] = "and"
-    route: Literal["rag", "summarize"] | None = None
-    trace_id: str | None = None
 
 
 class SourceChunk(BaseModel):
@@ -25,7 +20,6 @@ class SourceChunk(BaseModel):
     content: str
     metadata: dict[str, Any]
     score: float
-    highlights: list[str] = Field(default_factory=list)
 
 
 class Citation(BaseModel):
@@ -41,11 +35,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceChunk]
     refusal_reason: str | None = None
-    route: str
     request_id: str
-    answerer: str | None = None
-    answerer_reason: str | None = None
-    structured: dict[str, Any] | None = None
     citations: list[Citation] = Field(default_factory=list)
 
 
@@ -65,43 +55,3 @@ class IngestResponse(BaseModel):
     """Response payload for ingest requests."""
     ingested: int
 
-
-class StatsResponse(BaseModel):
-    """Vector store stats response."""
-    backend: str
-    document_count: int
-    embedding_dimension: int
-    collection: str | None = None
-
-
-class StatsHealthResponse(BaseModel):
-    """Vector store health response."""
-    backend: str
-    ok: bool
-    detail: str | None = None
-    collection: str | None = None
-
-
-class EmbeddingHealthResponse(BaseModel):
-    """Embedding configuration health response."""
-    provider: str
-    model: str | None
-    configured_dimension: int
-    expected_dimension: int | None = None
-    ok: bool
-    status: str
-    detail: str | None = None
-    action: str | None = None
-
-
-
-class DeleteSourceRequest(BaseModel):
-    """Request payload for source deletion."""
-    source_types: list[str] | None = None
-    source_names: list[str] | None = None
-    source_filter_mode: Literal["and", "or"] = "and"
-
-
-class DeleteSourceResponse(BaseModel):
-    """Response payload for source deletion."""
-    deleted: int

@@ -11,7 +11,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Pipfile Pipfile.lock ./
-RUN pipenv install --deploy --system
+RUN pipenv install --system
 
 COPY src ./src
 

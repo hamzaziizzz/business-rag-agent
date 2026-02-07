@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.rag.answerer import ExtractiveAnswerer
 from src.rag.embeddings import HashEmbedder
 from src.rag.pipeline import RAGPipeline
-from src.rag.types import Document, SearchResult
+from src.rag.types import Document
 from src.vectorstore.inmemory import InMemoryVectorStore
 
 
@@ -57,63 +57,3 @@ def test_min_score_filters_low_relevance() -> None:
     assert response.answer.startswith("I don't know")
     assert response.sources == []
 
-
-def test_source_name_weight_reranks() -> None:
-    """Ensure source-name weights can rerank results."""
-    pipeline = build_pipeline()
-    pipeline.source_name_weights = {"beta": 2.0}
-    results = [
-        SearchResult(
-            document=Document(
-                doc_id="alpha-doc",
-                content="Alpha content",
-                metadata={"source_type": "db", "source_name": "alpha"},
-            ),
-            score=0.4,
-        ),
-        SearchResult(
-            document=Document(
-                doc_id="beta-doc",
-                content="Beta content",
-                metadata={"source_type": "db", "source_name": "beta"},
-            ),
-            score=0.4,
-        ),
-    ]
-
-    contexts = pipeline.build_context(results, limit=1)
-
-    assert contexts
-    assert contexts[0].document_id == "beta-doc"
-
-
-def test_min_score_by_source_overrides_type() -> None:
-    """Ensure source-specific thresholds override type thresholds."""
-    pipeline = build_pipeline()
-    results = [
-        SearchResult(
-            document=Document(
-                doc_id="finance-doc",
-                content="Finance content",
-                metadata={"source_type": "db", "source_name": "finance"},
-            ),
-            score=0.5,
-        ),
-        SearchResult(
-            document=Document(
-                doc_id="sales-doc",
-                content="Sales content",
-                metadata={"source_type": "db", "source_name": "sales"},
-            ),
-            score=0.5,
-        ),
-    ]
-
-    contexts = pipeline.build_context(
-        results,
-        min_score_by_type={"db": 0.1},
-        min_score_by_source={"finance": 0.9},
-        limit=2,
-    )
-
-    assert [chunk.document_id for chunk in contexts] == ["sales-doc"]

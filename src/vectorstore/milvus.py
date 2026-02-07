@@ -101,19 +101,23 @@ class MilvusVectorStore:
                 dtype=DataType.FLOAT_VECTOR,
                 dim=self.embedder.dimension,
             ),
-            FieldSchema(
-                name="text_sparse",
-                dtype=DataType.SPARSE_FLOAT_VECTOR,
-            ),
         ]
-        functions = [
-            Function(
-                name="content_bm25",
-                input_field_names=["content"],
-                output_field_names=["text_sparse"],
-                function_type=FunctionType.BM25,
+        functions = []
+        if self.config.hybrid_search:
+            fields.append(
+                FieldSchema(
+                    name="text_sparse",
+                    dtype=DataType.SPARSE_FLOAT_VECTOR,
+                )
             )
-        ]
+            functions.append(
+                Function(
+                    name="content_bm25",
+                    input_field_names=["content"],
+                    output_field_names=["text_sparse"],
+                    function_type=FunctionType.BM25,
+                )
+            )
         schema = CollectionSchema(
             fields=fields,
             description="Business RAG documents",
@@ -160,17 +164,18 @@ class MilvusVectorStore:
         except Exception:
             # Collection may already have an index or use a different config.
             pass
-        try:
-            self.collection.create_index(
-                field_name="text_sparse",
-                index_params={
-                    "index_type": "SPARSE_INVERTED_INDEX",
-                    "metric_type": "BM25",
-                    "params": {"inverted_index_algo": self.config.sparse_index_algo},
-                },
-            )
-        except Exception:
-            pass
+        if self.config.hybrid_search:
+            try:
+                self.collection.create_index(
+                    field_name="text_sparse",
+                    index_params={
+                        "index_type": "SPARSE_INVERTED_INDEX",
+                        "metric_type": "BM25",
+                        "params": {"inverted_index_algo": self.config.sparse_index_algo},
+                    },
+                )
+            except Exception:
+                pass
 
     def _existing_embedding_dim(self) -> int | None:
         """Read embedding dimension from existing collection schema."""
