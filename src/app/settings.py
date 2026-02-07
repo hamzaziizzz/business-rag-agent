@@ -104,6 +104,11 @@ class Settings:
     metadata_db_uri: str | None = os.getenv("RAG_METADATA_DB_URI")
     audit_db_uri: str | None = os.getenv("RAG_AUDIT_DB_URI")
     chat_history_turns: int = int(os.getenv("RAG_CHAT_HISTORY_TURNS", "6"))
+    demo_role_header: bool = os.getenv("RAG_DEMO_ROLE_HEADER", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
     @property

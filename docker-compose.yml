@@ -6,12 +6,15 @@ services:
       RAG_VECTORSTORE: milvus
       MILVUS_URI: http://milvus:19530
       OLLAMA_BASE_URL: http://ollama:11434
+      RAG_METADATA_DB_URI: postgresql://rag:rag@postgres:5432/rag_metadata
+      RAG_AUDIT_DB_URI: postgresql://rag:rag@postgres:5432/rag_metadata
     ports:
       - "8000:8000"
     depends_on:
       - milvus
       - minio
       - ollama
+      - postgres
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 10s
@@ -129,7 +132,22 @@ services:
     depends_on:
       - milvus
 
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: rag_metadata
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag_metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   minio-data:
   etcd-data:
   ollama-data:
+  postgres-data:

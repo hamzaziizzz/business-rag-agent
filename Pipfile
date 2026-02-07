@@ -24,6 +24,7 @@ httpx = "*"
 streamlit = "*"
 tiktoken = "*"
 pymupdf = "*"
+sqlalchemy = "*"
 
 [dev-packages]
 ruff = "*"

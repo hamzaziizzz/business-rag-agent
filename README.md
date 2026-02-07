@@ -63,6 +63,7 @@ Follow the Basic Package guide:
 
 * `fiverr_assets/basic_package.md`
 * `docs/standard_package.md` (Standard package checklist)
+* `docs/api.md` (Premium API docs)
 
 ---
 

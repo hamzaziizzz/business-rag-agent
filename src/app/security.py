@@ -26,6 +26,13 @@ async def require_api_key(request: Request) -> AuthContext:
     allow_anonymous = os.getenv("RAG_ALLOW_ANONYMOUS", "false").lower() in {"1", "true", "yes"}
     if not (key_map or allowed):
         if allow_anonymous:
+            demo_role = request.headers.get("x-demo-role", "").strip().lower()
+            if settings.demo_role_header and demo_role in {"admin", "writer", "reader"}:
+                return AuthContext(
+                    api_key=None,
+                    role=demo_role,
+                    tenant_id=settings.default_tenant_id,
+                )
             return AuthContext(api_key=None, role="admin", tenant_id=settings.default_tenant_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
